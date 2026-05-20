@@ -84,20 +84,22 @@ app/build/outputs/apk/debug/
 - 不提交 `.idea/`、`*.iml` 等本机 IDE 配置。
 - 不提交 `*.apk`、`*.aab` 等安装包产物。
 - 不提交 `*.keystore`、`*.jks` 等签名文件。
-- 如后续新增接口、密钥或第三方服务配置，请放入本机配置或安全的发布流程中，不要写死在源码里。
+- 如后续新增接口、密钥或第三方服务配置，请放入本机配置或安全的发布流程中，不要直接写入源码。
 
-当前项目暂未包含敏感接口地址或密钥。
+当前仓库不包含敏感接口地址或密钥。
 
 ## 截图
 
-README 不强制需要图片。若要让 GitHub 页面更直观，建议补充 2 到 4 张应用截图，例如：
-
 - 账单首页
-- 统计页面
+![alt text](docs/images/image.png)
 - AA 分账页面
+![alt text](docs/images/image-1.png)
 - 旅行助手页面
+![alt text](docs/images/image-2.png)
+- 记账详情
+![alt text](docs/images/image-3.png)
 
-可以将图片放到 `docs/images/` 目录，再在 README 中引用。
+图片已统一存放于 `docs/images/` 目录。
 
 ## License
 
