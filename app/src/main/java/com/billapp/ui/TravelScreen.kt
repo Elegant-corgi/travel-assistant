@@ -1,6 +1,11 @@
 package com.billapp.ui
 
 import android.app.DatePickerDialog
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
@@ -15,10 +20,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -80,6 +87,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.billapp.data.TravelExpense
 import com.billapp.data.TravelExpenseCategory
@@ -90,11 +98,13 @@ import com.billapp.data.TravelTripDraft
 import com.billapp.data.TravelUiState
 import com.billapp.data.buildTravelCategoryStats
 import com.billapp.data.buildTravelCopyText
+import com.billapp.data.buildTravelFullBillXlsx
 import com.billapp.data.buildTravelSettlementLines
 import com.billapp.data.buildTravelSummary
 import com.billapp.data.formatMoney
 import com.billapp.data.parseTravelMembers
 import com.billapp.data.parseMoneyToCents
+import java.io.File
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.LocalDate
@@ -127,16 +137,21 @@ fun TravelScreen(
     val travelWorkspace by viewModel.travelWorkspace.collectAsStateWithLifecycle()
     val uiState by viewModel.travelUiState.collectAsStateWithLifecycle()
     val creatorState by viewModel.travelTripCreatorState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val swipeThreshold = with(LocalDensity.current) { 40.dp.toPx() }
     var showDeleteTripDialog by rememberSaveable { mutableStateOf(false) }
     var showTripMembersSheet by rememberSaveable { mutableStateOf(false) }
+    var travelBillActionTripId by rememberSaveable { mutableStateOf<String?>(null) }
     var tripMemberSheetText by rememberSaveable { mutableStateOf("") }
     var tripCreatorMemberText by rememberSaveable { mutableStateOf("") }
     var travelDragAmount by remember { mutableStateOf(0f) }
     var travelTransitionDirection by remember { mutableStateOf(1) }
     val selectedTravelTrip = trip
     val travelTrips = travelWorkspace.trips
+    val travelBillActionTrip = travelBillActionTripId?.let { tripId ->
+        travelTrips.firstOrNull { it.id == tripId }
+    }
     val currentTripIndex = selectedTravelTrip?.let { selectedTrip ->
         travelTrips.indexOfFirst { it.id == selectedTrip.id }
     } ?: -1
@@ -231,7 +246,7 @@ fun TravelScreen(
                         TravelQuickActions(
                             onAddExpense = viewModel::openTravelExpenseCreator,
                             onCopySummary = {
-                                clipboardManager.setText(AnnotatedString(buildTravelCopyText(currentTrip)))
+                                travelBillActionTripId = currentTrip.id
                             },
                         )
                     }
@@ -256,7 +271,7 @@ fun TravelScreen(
                             trip = currentTrip,
                             summary = currentSummary,
                             onCopy = {
-                                clipboardManager.setText(AnnotatedString(buildTravelCopyText(currentTrip)))
+                                travelBillActionTripId = currentTrip.id
                             },
                         )
                     }
@@ -304,6 +319,40 @@ fun TravelScreen(
                 dismissButton = {
                     TextButton(onClick = { showDeleteTripDialog = false }) {
                         Text("取消")
+                    }
+                },
+            )
+        }
+
+        if (travelBillActionTrip != null) {
+            AlertDialog(
+                onDismissRequest = { travelBillActionTripId = null },
+                title = { Text("AA 账单") },
+                text = { Text("选择要导出的账单形式。") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val exported = shareTravelFullBill(context, travelBillActionTrip)
+                            travelBillActionTripId = null
+                            Toast.makeText(
+                                context,
+                                if (exported) "已生成完整账单" else "未找到可打开 Excel 的应用",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                    ) {
+                        Text("导出完整账单")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(buildTravelCopyText(travelBillActionTrip)))
+                            travelBillActionTripId = null
+                            Toast.makeText(context, "已复制简洁账单", Toast.LENGTH_SHORT).show()
+                        },
+                    ) {
+                        Text("复制简洁账单")
                     }
                 },
             )
@@ -788,10 +837,16 @@ private fun TravelExpenseRow(
         shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(
+        BoxWithConstraints(
             modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            val actionWeight = when {
+                maxWidth < 360.dp -> 0.48f
+                maxWidth < 440.dp -> 0.42f
+                else -> 0.34f
+            }
+            val detailWeight = 1f - actionWeight
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -811,7 +866,7 @@ private fun TravelExpenseRow(
                 }
 
                 Column(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(detailWeight),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Row(
@@ -847,28 +902,67 @@ private fun TravelExpenseRow(
                     }
                 }
 
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = formatMoney(expense.amountCents),
-                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                        ),
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        TextButton(onClick = onEdit) {
-                            Text("编辑")
-                        }
-                        TextButton(onClick = onToggleSettled) {
-                            Text(if (expense.settled) "撤回" else "结清")
-                        }
-                    }
-                    TextButton(onClick = onDelete) {
-                        Text(
-                            text = "删除",
-                            color = androidx.compose.material3.MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
+                TravelExpenseActions(
+                    expense = expense,
+                    onEdit = onEdit,
+                    onToggleSettled = onToggleSettled,
+                    onDelete = onDelete,
+                    modifier = Modifier.weight(actionWeight),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TravelExpenseActions(
+    expense: TravelExpense,
+    onEdit: () -> Unit,
+    onToggleSettled: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = formatMoney(expense.amountCents),
+            style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(
+                fontWeight = FontWeight.Bold,
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(0.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = onEdit,
+                modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+            ) {
+                Text("编辑", maxLines = 1)
+            }
+            TextButton(
+                onClick = onToggleSettled,
+                modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+            ) {
+                Text(if (expense.settled) "撤回" else "结清", maxLines = 1)
+            }
+            IconButton(
+                onClick = onDelete,
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "删除",
+                    tint = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(18.dp),
+                )
             }
         }
     }
@@ -1869,6 +1963,44 @@ private fun TravelMemberChip(
             ),
         )
     }
+}
+
+private fun shareTravelFullBill(
+    context: Context,
+    trip: TravelTrip,
+): Boolean {
+    val exportDir = File(context.cacheDir, "travel_exports").apply { mkdirs() }
+    val fileName = "${safeTravelExportName(trip.name)}-${System.currentTimeMillis()}.xlsx"
+    val exportFile = File(exportDir, fileName)
+    exportFile.writeBytes(buildTravelFullBillXlsx(trip))
+
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        exportFile,
+    )
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        putExtra(Intent.EXTRA_SUBJECT, "${trip.name} 完整账单")
+        clipData = ClipData.newRawUri("完整账单", uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    return try {
+        context.startActivity(Intent.createChooser(intent, "导出完整账单"))
+        true
+    } catch (_: ActivityNotFoundException) {
+        false
+    }
+}
+
+private fun safeTravelExportName(name: String): String {
+    val safeName = name
+        .trim()
+        .replace(Regex("""[\\/:*?"<>|]"""), "_")
+        .take(40)
+    return safeName.ifBlank { "旅行账单" }
 }
 
 private fun travelCategoryVisual(category: TravelExpenseCategory): TravelCategoryVisual {
