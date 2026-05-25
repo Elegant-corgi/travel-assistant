@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import java.io.File
 
 class FileBillRepository(context: Context) : BillRepository {
+    private val preferences = context.getSharedPreferences("bill_settings", Context.MODE_PRIVATE)
     private val file = File(context.filesDir, "bills.json")
     private val json = Json {
         prettyPrint = true
@@ -19,6 +20,8 @@ class FileBillRepository(context: Context) : BillRepository {
     }
     private val _bills = MutableStateFlow(load())
     override val bills: StateFlow<List<BillEntry>> = _bills.asStateFlow()
+    private val _monthlyBudgetText = MutableStateFlow(preferences.getString(MONTHLY_BUDGET_KEY, "").orEmpty())
+    override val monthlyBudgetText: StateFlow<String> = _monthlyBudgetText.asStateFlow()
 
     override suspend fun upsert(entry: BillEntry) {
         withContext(Dispatchers.IO) {
@@ -42,6 +45,14 @@ class FileBillRepository(context: Context) : BillRepository {
         }
     }
 
+    override suspend fun updateMonthlyBudget(budgetText: String) {
+        withContext(Dispatchers.IO) {
+            val normalized = budgetText.trim()
+            preferences.edit().putString(MONTHLY_BUDGET_KEY, normalized).apply()
+            _monthlyBudgetText.value = normalized
+        }
+    }
+
     private fun load(): List<BillEntry> {
         if (!file.exists()) return emptyList()
         return runCatching {
@@ -57,5 +68,9 @@ class FileBillRepository(context: Context) : BillRepository {
         it.dateIso
     }.thenByDescending {
         it.updatedAt
+    }
+
+    private companion object {
+        const val MONTHLY_BUDGET_KEY = "monthly_budget_text"
     }
 }

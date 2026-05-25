@@ -63,6 +63,7 @@ data class TravelExpenseDraft(
     val category: TravelExpenseCategory = TravelExpenseCategory.Food,
     val amountText: String = "",
     val payer: String = "",
+    val participantMembers: List<String> = emptyList(),
     val note: String = "",
 )
 
@@ -79,6 +80,7 @@ data class TravelTripDraft(
 data class TravelUiState(
     val open: Boolean = false,
     val draft: TravelExpenseDraft = defaultTravelExpenseDraft(),
+    val editingExpenseId: String? = null,
     val error: String? = null,
 )
 
@@ -111,8 +113,19 @@ data class TravelSummary(
     val settlementDueCents: Long,
 )
 
-fun defaultTravelExpenseDraft(defaultPayer: String = ""): TravelExpenseDraft = TravelExpenseDraft(
+data class TravelCategoryStat(
+    val category: TravelExpenseCategory,
+    val amountCents: Long,
+    val expenseCount: Int,
+    val progress: Float,
+)
+
+fun defaultTravelExpenseDraft(
+    defaultPayer: String = "",
+    participantMembers: List<String> = emptyList(),
+): TravelExpenseDraft = TravelExpenseDraft(
     payer = defaultPayer,
+    participantMembers = participantMembers,
 )
 
 fun defaultTravelTripDraft(now: LocalDate = LocalDate.now()): TravelTripDraft = TravelTripDraft(
@@ -406,6 +419,27 @@ fun addTravelExpense(
     return trip.copy(expenses = listOf(expense) + trip.expenses)
 }
 
+fun upsertTravelExpense(
+    trip: TravelTrip,
+    expense: TravelExpense,
+): TravelTrip {
+    if (trip.expenses.none { it.id == expense.id }) {
+        return addTravelExpense(trip, expense)
+    }
+    return trip.copy(
+        expenses = trip.expenses.map { current ->
+            if (current.id == expense.id) expense else current
+        },
+    )
+}
+
+fun deleteTravelExpense(
+    trip: TravelTrip,
+    expenseId: String,
+): TravelTrip {
+    return trip.copy(expenses = trip.expenses.filterNot { it.id == expenseId })
+}
+
 fun toggleTravelExpenseSettled(
     trip: TravelTrip,
     expenseId: String,
@@ -434,6 +468,59 @@ fun toggleTravelChecklist(
             }
         },
     )
+}
+
+fun addTravelChecklistItem(
+    trip: TravelTrip,
+    label: String,
+): TravelTrip {
+    val candidate = label.trim()
+    if (candidate.isBlank()) return trip
+    val item = TravelChecklistItem(
+        id = java.util.UUID.randomUUID().toString(),
+        label = candidate,
+        packed = false,
+    )
+    return trip.copy(checklist = trip.checklist + item)
+}
+
+fun deleteTravelChecklistItem(
+    trip: TravelTrip,
+    itemId: String,
+): TravelTrip {
+    return trip.copy(checklist = trip.checklist.filterNot { it.id == itemId })
+}
+
+fun addTravelReminder(
+    trip: TravelTrip,
+    reminder: String,
+): TravelTrip {
+    val candidate = reminder.trim()
+    if (candidate.isBlank() || candidate in trip.reminders) return trip
+    return trip.copy(reminders = trip.reminders + candidate)
+}
+
+fun deleteTravelReminder(
+    trip: TravelTrip,
+    reminder: String,
+): TravelTrip {
+    return trip.copy(reminders = trip.reminders.filterNot { it == reminder })
+}
+
+fun buildTravelCategoryStats(trip: TravelTrip): List<TravelCategoryStat> {
+    val totalCents = trip.expenses.sumOf { it.amountCents }.coerceAtLeast(1L)
+    return trip.expenses
+        .groupBy { it.category }
+        .map { (category, expenses) ->
+            val amountCents = expenses.sumOf { it.amountCents }
+            TravelCategoryStat(
+                category = category,
+                amountCents = amountCents,
+                expenseCount = expenses.size,
+                progress = (amountCents.toFloat() / totalCents.toFloat()).coerceIn(0f, 1f),
+            )
+        }
+        .sortedByDescending { it.amountCents }
 }
 
 fun buildTravelSettlementLines(trip: TravelTrip): List<TravelSettlementLine> {

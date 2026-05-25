@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -23,6 +24,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Add
@@ -57,6 +60,7 @@ import androidx.compose.material.icons.filled.VolunteerActivism
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.Train
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -87,14 +91,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
@@ -106,6 +113,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import com.billapp.data.BillDraft
 import com.billapp.data.BillEntry
 import com.billapp.data.BillStats
+import com.billapp.data.BillType
 import com.billapp.data.CategoryAmount
 import com.billapp.data.StatPoint
 import com.billapp.data.StatRange
@@ -113,6 +121,7 @@ import com.billapp.data.appendAmountInput
 import com.billapp.data.defaultCategories
 import com.billapp.data.formatDraftAmount
 import com.billapp.data.formatMoney
+import com.billapp.data.parseMoneyToCents
 import com.billapp.data.removeLastAmountInput
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -138,16 +147,29 @@ private const val NOTE_PLACEHOLDER = "\u8fd9\u91cc\u8f93\u5165\u5907\u6ce8"
 private const val DATE_TEXT = "\u65e5\u671f"
 private const val STATS_COUNT_TEXT = "\u7edf\u8ba1\u8303\u56f4\u5185\u5171 %d \u7b14\u652f\u51fa"
 private const val TOTAL_EXPENSE_TEXT = "\u603b\u652f\u51fa"
+private const val TOTAL_INCOME_TEXT = "总收入"
+private const val NET_BALANCE_TEXT = "结余"
 private const val AVERAGE_TEXT = "\u65e5\u5747"
 private const val BILL_COUNT_TEXT = "\u7b14\u6570"
 private const val CATEGORY_RATIO_TEXT = "\u5206\u7c7b\u6392\u884c"
 private const val NO_DATA_TEXT = "\u6682\u65e0\u6570\u636e"
+private const val FILTER_ALL_TEXT = "全部"
+private const val SEARCH_PLACEHOLDER = "搜索分类、备注或金额"
+private const val FILTER_EMPTY_TITLE = "没有匹配账单"
+private const val FILTER_EMPTY_HINT = "换个关键词或分类试试"
+private const val DELETE_CONFIRM_TITLE = "删除这笔账单？"
+private const val DELETE_CONFIRM_TEXT = "删除后无法在应用内恢复。"
+private const val MONTHLY_BUDGET_TEXT = "月预算"
+private const val BUDGET_REMAINING_TEXT = "剩余"
+private const val BUDGET_OVER_TEXT = "已超出"
+private const val BUDGET_HINT_TEXT = "设置预算后可查看本月使用进度"
 private const val CLEAR_TEXT = "\u6e05\u7a7a"
 private const val BACKSPACE_TEXT = "\u5220\u9664"
 private const val CONFIRM_TEXT = "\u786e\u8ba4"
 private const val CHANGE_CATEGORY_TEXT = "\u91cd\u9009\u5206\u7c7b"
 private const val CATEGORY_PAGE_SIZE = 10
 private const val CATEGORY_ROW_SIZE = 5
+private const val EditorSheetMaxHeightRatio = 0.9f
 private val CategoryCardHeight = 118.dp
 private val CompactCategoryCardHeight = 84.dp
 private val CompactCategoryStripItemWidth = 64.dp
@@ -220,14 +242,19 @@ private fun sectionTitle(section: AppSection): String = when (section) {
 @Composable
 fun BillApp(viewModel: BillViewModel) {
     val bills by viewModel.bills.collectAsStateWithLifecycle()
+    val filteredBills by viewModel.filteredBills.collectAsStateWithLifecycle()
+    val ledgerFilter by viewModel.ledgerFilter.collectAsStateWithLifecycle()
+    val ledgerCategories by viewModel.ledgerCategories.collectAsStateWithLifecycle()
     val selectedSection by viewModel.selectedSection.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val stats by viewModel.stats.collectAsStateWithLifecycle()
     val range by viewModel.statRange.collectAsStateWithLifecycle()
+    val monthlyBudgetText by viewModel.monthlyBudgetText.collectAsStateWithLifecycle()
     val editorState by viewModel.editorState.collectAsStateWithLifecycle()
     val prioritizedCategories by viewModel.prioritizedCategories.collectAsStateWithLifecycle()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
+    var pendingDeleteBill by remember { mutableStateOf<BillEntry?>(null) }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -334,16 +361,24 @@ fun BillApp(viewModel: BillViewModel) {
                 when (selectedSection) {
                     AppSection.Billing -> when (selectedTab) {
                         AppTab.Ledger -> LedgerScreen(
-                            bills = bills,
+                            bills = filteredBills,
+                            hasAnyBills = bills.isNotEmpty(),
+                            filter = ledgerFilter,
+                            categories = ledgerCategories,
+                            onQueryChange = viewModel::updateLedgerQuery,
+                            onCategoryChange = viewModel::selectLedgerCategory,
                             onEdit = viewModel::editBill,
-                            onDelete = viewModel::deleteBill,
+                            onDelete = { pendingDeleteBill = it },
+                            onCreateAa = viewModel::createAaFromBill,
                             modifier = Modifier.fillMaxSize(),
                         )
 
                         AppTab.Stats -> StatsScreen(
                             stats = stats,
                             range = range,
+                            monthlyBudgetText = monthlyBudgetText,
                             onRangeChange = viewModel::selectRange,
+                            onMonthlyBudgetChange = viewModel::updateMonthlyBudget,
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -375,6 +410,29 @@ fun BillApp(viewModel: BillViewModel) {
                 onCancel = viewModel::closeEditor,
             )
         }
+    }
+
+    pendingDeleteBill?.let { bill ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteBill = null },
+            title = { Text(DELETE_CONFIRM_TITLE) },
+            text = { Text(DELETE_CONFIRM_TEXT) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteBill(bill)
+                        pendingDeleteBill = null
+                    },
+                ) {
+                    Text(DELETE_TEXT)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteBill = null }) {
+                    Text(CANCEL_TEXT)
+                }
+            },
+        )
     }
 }
 
@@ -415,8 +473,14 @@ private fun AppDrawerContent(
 @Composable
 private fun LedgerScreen(
     bills: List<BillEntry>,
+    hasAnyBills: Boolean,
+    filter: LedgerFilterState,
+    categories: List<String>,
+    onQueryChange: (String) -> Unit,
+    onCategoryChange: (String?) -> Unit,
     onEdit: (BillEntry) -> Unit,
     onDelete: (BillEntry) -> Unit,
+    onCreateAa: (BillEntry) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val dayGroups = remember(bills) {
@@ -430,12 +494,14 @@ private fun LedgerScreen(
                 BillDayGroup(
                     date = date,
                     bills = items.map { it.first },
-                    totalCents = items.sumOf { it.first.amountCents },
+                    totalCents = items
+                        .filter { it.first.type == BillType.Expense }
+                        .sumOf { it.first.amountCents },
                 )
             }
     }
 
-    if (dayGroups.isEmpty()) {
+    if (!hasAnyBills) {
         EmptyState(modifier = modifier)
         return
     }
@@ -445,13 +511,104 @@ private fun LedgerScreen(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
+        item {
+            LedgerFilterBar(
+                filter = filter,
+                categories = categories,
+                onQueryChange = onQueryChange,
+                onCategoryChange = onCategoryChange,
+            )
+        }
+        if (dayGroups.isEmpty()) {
+            item {
+                FilterEmptyState()
+            }
+        }
         items(dayGroups, key = { it.date.toString() }) { group ->
             BillDaySection(
                 group = group,
                 onEdit = onEdit,
                 onDelete = onDelete,
+                onCreateAa = onCreateAa,
             )
         }
+    }
+}
+
+@Composable
+private fun LedgerFilterBar(
+    filter: LedgerFilterState,
+    categories: List<String>,
+    onQueryChange: (String) -> Unit,
+    onCategoryChange: (String?) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedTextField(
+            value = filter.query,
+            onValueChange = onQueryChange,
+            placeholder = { Text(SEARCH_PLACEHOLDER) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            shape = MaterialTheme.shapes.extraLarge,
+        )
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                FilterChip(
+                    text = FILTER_ALL_TEXT,
+                    selected = filter.category == null,
+                    onClick = { onCategoryChange(null) },
+                )
+            }
+            items(categories, key = { it }) { category ->
+                FilterChip(
+                    text = category,
+                    selected = filter.category == category,
+                    onClick = { onCategoryChange(category) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FilterChip(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        color = if (selected) Color(0xFF222222) else SheetCard,
+        contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+        shape = MaterialTheme.shapes.extraLarge,
+        border = BorderStroke(1.dp, if (selected) Color.Transparent else Color(0xFFE7E2F0)),
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun FilterEmptyState() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = FILTER_EMPTY_TITLE,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+        )
+        Text(
+            text = FILTER_EMPTY_HINT,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -459,7 +616,9 @@ private fun LedgerScreen(
 private fun StatsScreen(
     stats: BillStats,
     range: StatRange,
+    monthlyBudgetText: String,
     onRangeChange: (StatRange) -> Unit,
+    onMonthlyBudgetChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val visiblePoints = remember(stats.points, range) {
@@ -496,15 +655,24 @@ private fun StatsScreen(
                         value = formatMoney(stats.totalCents),
                     ),
                     StatMetric(
-                        label = AVERAGE_TEXT,
-                        value = formatMoney(stats.averagePerDayCents),
+                        label = TOTAL_INCOME_TEXT,
+                        value = formatMoney(stats.incomeCents),
                     ),
                     StatMetric(
-                        label = BILL_COUNT_TEXT,
-                        value = stats.totalCount.toString(),
+                        label = NET_BALANCE_TEXT,
+                        value = formatSignedMoney(stats.netBalanceCents),
                     ),
                 ),
             )
+        }
+        if (range == StatRange.Month) {
+            item {
+                MonthlyBudgetCard(
+                    spentCents = stats.totalCents,
+                    budgetText = monthlyBudgetText,
+                    onBudgetChange = onMonthlyBudgetChange,
+                )
+            }
         }
         item {
             SectionCard(title = trendSectionTitle(range)) {
@@ -624,6 +792,72 @@ private fun StatOverviewStrip(
                             .background(Color(0xFFEAE7F0)),
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MonthlyBudgetCard(
+    spentCents: Long,
+    budgetText: String,
+    onBudgetChange: (String) -> Unit,
+) {
+    val budgetCents = parseMoneyToCents(budgetText).takeIf { it != null && it > 0L }
+    val progress = if (budgetCents == null) {
+        0f
+    } else {
+        (spentCents.toFloat() / budgetCents.toFloat()).coerceIn(0f, 1f)
+    }
+    val balanceCents = (budgetCents ?: 0L) - spentCents
+    val balanceLabel = if (budgetCents == null) {
+        BUDGET_HINT_TEXT
+    } else if (balanceCents >= 0L) {
+        "$BUDGET_REMAINING_TEXT ${formatMoney(balanceCents)}"
+    } else {
+        "$BUDGET_OVER_TEXT ${formatMoney(-balanceCents)}"
+    }
+
+    SectionCard(title = MONTHLY_BUDGET_TEXT) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(
+                value = budgetText,
+                onValueChange = onBudgetChange,
+                label = { Text(MONTHLY_BUDGET_TEXT) },
+                prefix = { Text("¥") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.large,
+            )
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp),
+                color = if (budgetCents != null && spentCents > budgetCents) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    HighlightYellowDark
+                },
+                trackColor = Color(0xFFEAE7F0),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "已用 ${formatMoney(spentCents)}",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                )
+                Text(
+                    text = balanceLabel,
+                    color = if (budgetCents != null && spentCents > budgetCents) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
         }
     }
@@ -756,6 +990,7 @@ private fun BillDaySection(
     group: BillDayGroup,
     onEdit: (BillEntry) -> Unit,
     onDelete: (BillEntry) -> Unit,
+    onCreateAa: (BillEntry) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(
@@ -774,8 +1009,8 @@ private fun BillDaySection(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
-            Text(
-                text = "支出:${formatLedgerMoney(group.totalCents)}",
+                Text(
+                    text = "支出:${formatLedgerMoney(group.totalCents)}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
             )
@@ -787,6 +1022,7 @@ private fun BillDaySection(
                     bill = bill,
                     onEdit = { onEdit(bill) },
                     onDelete = { onDelete(bill) },
+                    onCreateAa = { onCreateAa(bill) },
                 )
             }
         }
@@ -798,6 +1034,7 @@ private fun BillLedgerItem(
     bill: BillEntry,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onCreateAa: () -> Unit,
 ) {
     val visual = visualForCategory(bill.category.ifBlank { defaultCategories.first() })
 
@@ -830,10 +1067,18 @@ private fun BillLedgerItem(
                 verticalAlignment = Alignment.Top,
             ) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(
-                        text = bill.category.ifBlank { defaultCategories.first() },
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = bill.category.ifBlank { defaultCategories.first() },
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        BillTypeBadge(type = bill.type)
+                    }
                     Text(
                         text = bill.note.ifBlank { NO_NOTE },
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -843,8 +1088,12 @@ private fun BillLedgerItem(
                     )
                 }
                 Text(
-                    text = formatLedgerMoney(bill.amountCents, signed = true),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    text = formatBillAmount(bill),
+                    color = if (bill.type == BillType.Income) {
+                        Color(0xFF1F8F55)
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                 )
             }
@@ -858,8 +1107,29 @@ private fun BillLedgerItem(
                     Icon(Icons.Default.Delete, contentDescription = null)
                     Text(DELETE_TEXT)
                 }
+                if (bill.type == BillType.Expense) {
+                    TextButton(onClick = onCreateAa) {
+                        Icon(Icons.Default.Payments, contentDescription = null)
+                        Text("转AA")
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun BillTypeBadge(type: BillType) {
+    Surface(
+        color = if (type == BillType.Income) Color(0xFFE4F7EC) else SheetPanel,
+        contentColor = if (type == BillType.Income) Color(0xFF1F8F55) else MaterialTheme.colorScheme.onSurfaceVariant,
+        shape = MaterialTheme.shapes.extraLarge,
+    ) {
+        Text(
+            text = type.label,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+        )
     }
 }
 
@@ -895,6 +1165,23 @@ private fun formatLedgerMoney(cents: Long, signed: Boolean = false): String {
     }
 }
 
+private fun formatBillAmount(bill: BillEntry): String {
+    val raw = formatMoney(bill.amountCents).removePrefix("¥")
+    return when (bill.type) {
+        BillType.Expense -> "-$raw"
+        BillType.Income -> "+$raw"
+    }
+}
+
+private fun formatSignedMoney(cents: Long): String {
+    val raw = formatMoney(kotlin.math.abs(cents)).removePrefix("¥")
+    return when {
+        cents > 0L -> "+¥$raw"
+        cents < 0L -> "-¥$raw"
+        else -> "¥$raw"
+    }
+}
+
 @Composable
 private fun BillEditorSheet(
     state: EditorState,
@@ -905,11 +1192,14 @@ private fun BillEditorSheet(
 ) {
     val draft = state.draft
     val hasSelectedCategory = draft.category.isNotBlank()
+    val maxSheetHeight = LocalConfiguration.current.screenHeightDp.dp * EditorSheetMaxHeightRatio
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(max = maxSheetHeight)
             .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
             .background(SheetBackground)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -1127,6 +1417,12 @@ private fun AmountEditorContent(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                BillTypeSelector(
+                    selectedType = draft.type,
+                    onTypeChange = { type ->
+                        onDraftChange { it.copy(type = type) }
+                    },
+                )
                 Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1192,8 +1488,13 @@ private fun AmountEditorContent(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text(
-                            text = "\u00a5${formatDraftAmount(draft.amountText)}",
+                            text = "${if (draft.type == BillType.Income) "+" else "-"}\u00a5${formatDraftAmount(draft.amountText)}",
                             style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
+                            color = if (draft.type == BillType.Income) {
+                                Color(0xFF1F8F55)
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
                         )
                         Box(
                             modifier = Modifier
@@ -1241,6 +1542,45 @@ private fun AmountEditorContent(
                     },
                     onConfirm = onSave,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BillTypeSelector(
+    selectedType: BillType,
+    onTypeChange: (BillType) -> Unit,
+) {
+    Surface(
+        color = SheetCard,
+        shape = MaterialTheme.shapes.extraLarge,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            BillType.entries.forEach { type ->
+                val selected = selectedType == type
+                Surface(
+                    onClick = { onTypeChange(type) },
+                    color = if (selected) Color(0xFF222222) else Color.Transparent,
+                    contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                    shape = MaterialTheme.shapes.extraLarge,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Box(
+                        modifier = Modifier.height(42.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = type.label,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        )
+                    }
+                }
             }
         }
     }

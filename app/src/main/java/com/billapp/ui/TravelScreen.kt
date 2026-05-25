@@ -2,6 +2,13 @@ package com.billapp.ui
 
 import android.app.DatePickerDialog
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -81,6 +88,7 @@ import com.billapp.data.TravelSummary
 import com.billapp.data.TravelTripCreatorState
 import com.billapp.data.TravelTripDraft
 import com.billapp.data.TravelUiState
+import com.billapp.data.buildTravelCategoryStats
 import com.billapp.data.buildTravelCopyText
 import com.billapp.data.buildTravelSettlementLines
 import com.billapp.data.buildTravelSummary
@@ -120,22 +128,25 @@ fun TravelScreen(
     val uiState by viewModel.travelUiState.collectAsStateWithLifecycle()
     val creatorState by viewModel.travelTripCreatorState.collectAsStateWithLifecycle()
     val clipboardManager = LocalClipboardManager.current
-    val swipeThreshold = with(LocalDensity.current) { 72.dp.toPx() }
+    val swipeThreshold = with(LocalDensity.current) { 40.dp.toPx() }
     var showDeleteTripDialog by rememberSaveable { mutableStateOf(false) }
     var showTripMembersSheet by rememberSaveable { mutableStateOf(false) }
+    var tripMemberSheetText by rememberSaveable { mutableStateOf("") }
+    var tripCreatorMemberText by rememberSaveable { mutableStateOf("") }
     var travelDragAmount by remember { mutableStateOf(0f) }
-    val currentTrip = trip
-    val currentSummary = remember(currentTrip) { currentTrip?.let { buildTravelSummary(it) } }
+    var travelTransitionDirection by remember { mutableStateOf(1) }
+    val selectedTravelTrip = trip
     val travelTrips = travelWorkspace.trips
-    val currentTripIndex = currentTrip?.let { selectedTrip ->
+    val currentTripIndex = selectedTravelTrip?.let { selectedTrip ->
         travelTrips.indexOfFirst { it.id == selectedTrip.id }
     } ?: -1
 
     Box(modifier = modifier.fillMaxSize()) {
-        LazyColumn(
+        AnimatedContent(
+            targetState = selectedTravelTrip?.id,
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(travelTrips, currentTrip?.id) {
+                .pointerInput(travelTrips, selectedTravelTrip?.id) {
                     if (travelTrips.size <= 1 || currentTripIndex < 0) return@pointerInput
 
                     detectHorizontalDragGestures(
@@ -150,81 +161,125 @@ fun TravelScreen(
                                 travelDragAmount >= swipeThreshold -> (currentTripIndex - 1 + travelTrips.size) % travelTrips.size
                                 else -> currentTripIndex
                             }
+                            val targetDirection = when {
+                                travelDragAmount <= -swipeThreshold -> 1
+                                travelDragAmount >= swipeThreshold -> -1
+                                else -> travelTransitionDirection
+                            }
 
                             if (targetIndex != currentTripIndex) {
+                                travelTransitionDirection = targetDirection
                                 viewModel.selectTravelTrip(travelTrips[targetIndex].id)
                             }
                             travelDragAmount = 0f
                         },
                     )
                 },
-            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 112.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            item {
-                if (currentTrip != null && currentSummary != null) {
-                    TravelHeroCard(
-                        trip = currentTrip,
-                        summary = currentSummary,
-                        onManageMembers = { showTripMembersSheet = true },
-                        onRequestDeleteTrip = { showDeleteTripDialog = true },
-                    )
-                } else {
-                    TravelEmptyTripCard(onCreateTrip = viewModel::openTravelTripCreator)
-                }
-            }
-            if (currentTrip != null && currentSummary != null) {
+            transitionSpec = {
+                val direction = travelTransitionDirection.coerceIn(-1, 1).takeIf { it != 0 } ?: 1
+                (
+                    slideInHorizontally { fullWidth -> direction * fullWidth } + fadeIn()
+                ).togetherWith(
+                    slideOutHorizontally { fullWidth -> -direction * fullWidth } + fadeOut()
+                ).using(SizeTransform(clip = false))
+            },
+            label = "TravelTripPager",
+        ) { pageTripId ->
+            val pageTrip = travelTrips.firstOrNull { it.id == pageTripId }
+            val pageTripIndex = travelTrips.indexOfFirst { it.id == pageTripId }
+            val pageSummary = remember(pageTrip) { pageTrip?.let { buildTravelSummary(it) } }
+
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 112.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
                 item {
-                    TravelMetricStrip(
-                        metrics = listOf(
-                            TravelMetric("已花", formatMoney(currentSummary.spentCents)),
-                            TravelMetric("剩余", formatMoney(currentSummary.remainingCents)),
-                            TravelMetric("日均", formatMoney(currentSummary.dailyAverageCents)),
-                            TravelMetric("待结算", formatMoney(currentSummary.settlementDueCents)),
-                        ),
-                    )
-                }
-                item {
-                    TravelQuickActions(
-                        onAddExpense = viewModel::openTravelExpenseCreator,
-                        onCopySummary = {
-                            clipboardManager.setText(AnnotatedString(buildTravelCopyText(currentTrip)))
-                        },
-                    )
-                }
-                if (currentTrip.isOverseas) {
-                    item {
-                        TravelConverterCard()
+                    if (pageTrip != null && pageSummary != null) {
+                        TravelHeroCard(
+                            trip = pageTrip,
+                            summary = pageSummary,
+                            onManageMembers = { showTripMembersSheet = true },
+                            onRequestDeleteTrip = { showDeleteTripDialog = true },
+                        )
+                    } else {
+                        TravelEmptyTripCard(onCreateTrip = viewModel::openTravelTripCreator)
                     }
                 }
-                item {
-                    TravelExpenseSection(
-                        trip = currentTrip,
-                        onToggleSettled = viewModel::toggleTravelExpenseSettled,
-                    )
+                if (travelTrips.size > 1 && pageTripIndex >= 0) {
+                    item {
+                        TravelTripPageIndicator(
+                            pageCount = travelTrips.size,
+                            currentPage = pageTripIndex,
+                        )
+                    }
                 }
-                item {
-                    TravelSettlementSection(
-                        trip = currentTrip,
-                        summary = currentSummary,
-                        onCopy = {
-                            clipboardManager.setText(AnnotatedString(buildTravelCopyText(currentTrip)))
-                        },
-                    )
-                }
-                item {
-                    TravelChecklistSection(
-                        trip = currentTrip,
-                        onToggleItem = viewModel::toggleTravelChecklist,
-                    )
-                }
-                item {
-                    TravelReminderSection(trip = currentTrip)
+                if (pageTrip != null && pageSummary != null) {
+                    val currentTrip = pageTrip
+                    val currentSummary = pageSummary
+                    item {
+                        TravelMetricStrip(
+                            metrics = listOf(
+                                TravelMetric("已花", formatMoney(currentSummary.spentCents)),
+                                TravelMetric("剩余", formatMoney(currentSummary.remainingCents)),
+                                TravelMetric("日均", formatMoney(currentSummary.dailyAverageCents)),
+                                TravelMetric("待结算", formatMoney(currentSummary.settlementDueCents)),
+                            ),
+                        )
+                    }
+                    item {
+                        TravelQuickActions(
+                            onAddExpense = viewModel::openTravelExpenseCreator,
+                            onCopySummary = {
+                                clipboardManager.setText(AnnotatedString(buildTravelCopyText(currentTrip)))
+                            },
+                        )
+                    }
+                    if (currentTrip.isOverseas) {
+                        item {
+                            TravelConverterCard()
+                        }
+                    }
+                    item {
+                        TravelCategoryStatsSection(trip = currentTrip)
+                    }
+                    item {
+                        TravelExpenseSection(
+                            trip = currentTrip,
+                            onEditExpense = viewModel::openTravelExpenseEditor,
+                            onDeleteExpense = viewModel::deleteTravelExpense,
+                            onToggleSettled = viewModel::toggleTravelExpenseSettled,
+                        )
+                    }
+                    item {
+                        TravelSettlementSection(
+                            trip = currentTrip,
+                            summary = currentSummary,
+                            onCopy = {
+                                clipboardManager.setText(AnnotatedString(buildTravelCopyText(currentTrip)))
+                            },
+                        )
+                    }
+                    item {
+                        TravelChecklistSection(
+                            trip = currentTrip,
+                            onToggleItem = viewModel::toggleTravelChecklist,
+                            onAddItem = viewModel::addTravelChecklistItem,
+                            onDeleteItem = viewModel::deleteTravelChecklistItem,
+                        )
+                    }
+                    item {
+                        TravelReminderSection(
+                            trip = currentTrip,
+                            onAddReminder = viewModel::addTravelReminder,
+                            onDeleteReminder = viewModel::deleteTravelReminder,
+                        )
+                    }
                 }
             }
         }
 
-        if (showDeleteTripDialog && currentTrip != null) {
+        if (showDeleteTripDialog && selectedTravelTrip != null) {
             AlertDialog(
                 onDismissRequest = { showDeleteTripDialog = false },
                 icon = {
@@ -235,11 +290,11 @@ fun TravelScreen(
                     )
                 },
                 title = { Text("删除行程") },
-                text = { Text("确认删除「${currentTrip.name}」吗？删除后无法恢复。") },
+                text = { Text("确认删除「${selectedTravelTrip.name}」吗？删除后无法恢复。") },
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            viewModel.deleteTravelTrip(currentTrip.id)
+                            viewModel.deleteTravelTrip(selectedTravelTrip.id)
                             showDeleteTripDialog = false
                         },
                     ) {
@@ -254,13 +309,15 @@ fun TravelScreen(
             )
         }
 
-        if (showTripMembersSheet && currentTrip != null) {
+        if (showTripMembersSheet && selectedTravelTrip != null) {
             ModalBottomSheet(
                 onDismissRequest = { showTripMembersSheet = false },
                 sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             ) {
                 TravelMembersSheet(
-                    trip = currentTrip,
+                    trip = selectedTravelTrip,
+                    newMemberText = tripMemberSheetText,
+                    onNewMemberTextChange = { tripMemberSheetText = it },
                     onDismiss = { showTripMembersSheet = false },
                     onAddMember = viewModel::addTravelMember,
                     onRemoveMember = viewModel::removeTravelMember,
@@ -268,14 +325,14 @@ fun TravelScreen(
             }
         }
 
-        if (uiState.open && currentTrip != null) {
+        if (uiState.open && selectedTravelTrip != null) {
             ModalBottomSheet(
                 onDismissRequest = viewModel::closeTravelExpenseCreator,
                 sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             ) {
                 TravelExpenseSheet(
                     uiState = uiState,
-                    trip = currentTrip,
+                    trip = selectedTravelTrip,
                     onDismiss = viewModel::closeTravelExpenseCreator,
                     onTitleChange = { title ->
                         viewModel.updateTravelDraft { it.copy(title = title) }
@@ -288,6 +345,7 @@ fun TravelScreen(
                     },
                     onCategorySelected = viewModel::selectTravelCategory,
                     onSelectPayer = viewModel::selectTravelPayer,
+                    onToggleParticipant = viewModel::toggleTravelParticipant,
                     onSave = viewModel::saveTravelExpense,
                 )
             }
@@ -300,6 +358,8 @@ fun TravelScreen(
             ) {
                 TravelTripSheet(
                     state = creatorState,
+                    newMemberText = tripCreatorMemberText,
+                    onNewMemberTextChange = { tripCreatorMemberText = it },
                     onDismiss = viewModel::closeTravelTripCreator,
                     onNameChange = { value ->
                         viewModel.updateTravelTripDraft { draft -> draft.copy(name = value) }
@@ -323,6 +383,34 @@ fun TravelScreen(
                     onSave = viewModel::saveTravelTrip,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun TravelTripPageIndicator(
+    pageCount: Int,
+    currentPage: Int,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(pageCount) { index ->
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 3.dp)
+                    .size(7.dp)
+                    .background(
+                        color = if (index == currentPage) {
+                            androidx.compose.material3.MaterialTheme.colorScheme.primary
+                        } else {
+                            Color(0xFFD2D8E2)
+                        },
+                        shape = CircleShape,
+                    ),
+            )
         }
     }
 }
@@ -371,12 +459,28 @@ private fun TravelHeroCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = "${trip.destination} · ${com.billapp.data.travelDateRangeLabel(trip)}",
+                        text = trip.destination,
                         color = Color(0xFF38536A),
                         style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CalendarMonth,
+                            contentDescription = null,
+                            tint = Color(0xFF38536A),
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            text = com.billapp.data.travelDateRangeLabel(trip),
+                            color = Color(0xFF38536A),
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                 }
 
                 Row(
@@ -634,6 +738,8 @@ private fun TravelConverterCard() {
 @Composable
 private fun TravelExpenseSection(
     trip: TravelTrip,
+    onEditExpense: (String) -> Unit,
+    onDeleteExpense: (String) -> Unit,
     onToggleSettled: (String) -> Unit,
 ) {
     val expenses = remember(trip.expenses) {
@@ -659,6 +765,8 @@ private fun TravelExpenseSection(
             expenses.forEach { expense ->
                 TravelExpenseRow(
                     expense = expense,
+                    onEdit = { onEditExpense(expense.id) },
+                    onDelete = { onDeleteExpense(expense.id) },
                     onToggleSettled = { onToggleSettled(expense.id) },
                 )
             }
@@ -669,6 +777,8 @@ private fun TravelExpenseSection(
 @Composable
 private fun TravelExpenseRow(
     expense: TravelExpense,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
     onToggleSettled: () -> Unit,
 ) {
     val visual = travelCategoryVisual(expense.category)
@@ -722,7 +832,7 @@ private fun TravelExpenseRow(
                         )
                     }
                     Text(
-                        text = "${expense.category.label} · 付款人 ${expense.payer}",
+                        text = "${expense.category.label} · 付款人 ${expense.payer} · ${travelParticipantsLabel(expense.members)}",
                         color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                         style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
                     )
@@ -744,9 +854,96 @@ private fun TravelExpenseRow(
                             fontWeight = FontWeight.Bold,
                         ),
                     )
-                    TextButton(onClick = onToggleSettled) {
-                        Text(if (expense.settled) "撤回" else "结清")
+                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        TextButton(onClick = onEdit) {
+                            Text("编辑")
+                        }
+                        TextButton(onClick = onToggleSettled) {
+                            Text(if (expense.settled) "撤回" else "结清")
+                        }
                     }
+                    TextButton(onClick = onDelete) {
+                        Text(
+                            text = "删除",
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TravelCategoryStatsSection(trip: TravelTrip) {
+    val stats = remember(trip.expenses) { buildTravelCategoryStats(trip) }
+
+    TravelSectionCard(
+        title = "类别统计",
+        subtitle = "按支出类别汇总，方便旅行复盘",
+    ) {
+        if (stats.isEmpty()) {
+            Text(
+                text = "暂无可统计的支出",
+                color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@TravelSectionCard
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            stats.forEach { stat ->
+                val visual = travelCategoryVisual(stat.category)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(30.dp)
+                                    .background(visual.background, androidx.compose.material3.MaterialTheme.shapes.medium),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = visual.icon,
+                                    contentDescription = stat.category.label,
+                                    tint = visual.tint,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = stat.category.label,
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.SemiBold,
+                                    ),
+                                )
+                                Text(
+                                    text = "${stat.expenseCount} 笔",
+                                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                        Text(
+                            text = formatMoney(stat.amountCents),
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                        )
+                    }
+                    LinearProgressIndicator(
+                        progress = { stat.progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(7.dp),
+                        color = visual.tint,
+                    )
                 }
             }
         }
@@ -809,13 +1006,43 @@ private fun TravelSettlementLineRow(line: com.billapp.data.TravelSettlementLine)
 private fun TravelChecklistSection(
     trip: TravelTrip,
     onToggleItem: (String) -> Unit,
+    onAddItem: (String) -> Unit,
+    onDeleteItem: (String) -> Unit,
 ) {
     val packedCount = remember(trip.checklist) { trip.checklist.count { it.packed } }
+    var newItemText by rememberSaveable { mutableStateOf("") }
 
     TravelSectionCard(
         title = "打包清单",
         subtitle = "${packedCount}/${trip.checklist.size} 已完成",
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = newItemText,
+                onValueChange = { newItemText = it },
+                label = { Text("新增清单") },
+                placeholder = { Text("如：雨伞、泳衣") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+            Button(
+                onClick = {
+                    val candidate = newItemText.trim()
+                    if (candidate.isNotBlank()) {
+                        onAddItem(candidate)
+                        newItemText = ""
+                    }
+                },
+                shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
+            ) {
+                Text("添加")
+            }
+        }
+
         if (trip.checklist.isEmpty()) {
             Text(
                 text = "还没有旅行清单",
@@ -851,6 +1078,12 @@ private fun TravelChecklistSection(
                         },
                     )
                     TravelTinyChip(text = if (item.packed) "已装" else "待装", selected = item.packed)
+                    TextButton(onClick = { onDeleteItem(item.id) }) {
+                        Text(
+                            text = "删除",
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
         }
@@ -858,11 +1091,44 @@ private fun TravelChecklistSection(
 }
 
 @Composable
-private fun TravelReminderSection(trip: TravelTrip) {
+private fun TravelReminderSection(
+    trip: TravelTrip,
+    onAddReminder: (String) -> Unit,
+    onDeleteReminder: (String) -> Unit,
+) {
+    var newReminderText by rememberSaveable { mutableStateOf("") }
+
     TravelSectionCard(
         title = "行程提醒",
         subtitle = "把关键时间点放在这里，不容易漏",
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = newReminderText,
+                onValueChange = { newReminderText = it },
+                label = { Text("新增提醒") },
+                placeholder = { Text("如：提前 30 分钟出门") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+            Button(
+                onClick = {
+                    val candidate = newReminderText.trim()
+                    if (candidate.isNotBlank()) {
+                        onAddReminder(candidate)
+                        newReminderText = ""
+                    }
+                },
+                shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
+            ) {
+                Text("添加")
+            }
+        }
+
         if (trip.reminders.isEmpty()) {
             Text(
                 text = "当前没有提醒事项",
@@ -873,7 +1139,10 @@ private fun TravelReminderSection(trip: TravelTrip) {
 
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(trip.reminders, key = { it }) { reminder ->
-                TravelReminderChip(text = reminder)
+                TravelReminderChip(
+                    text = "$reminder ×",
+                    onClick = { onDeleteReminder(reminder) },
+                )
             }
         }
     }
@@ -889,10 +1158,12 @@ private fun TravelExpenseSheet(
     onNoteChange: (String) -> Unit,
     onCategorySelected: (TravelExpenseCategory) -> Unit,
     onSelectPayer: (String) -> Unit,
+    onToggleParticipant: (String) -> Unit,
     onSave: () -> Unit,
 ) {
     val draft = uiState.draft
     val scrollState = rememberScrollState()
+    val isEditing = uiState.editingExpenseId != null
 
     Column(
         modifier = Modifier
@@ -916,13 +1187,13 @@ private fun TravelExpenseSheet(
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "记一笔旅行支出",
+                    text = if (isEditing) "编辑旅行支出" else "记一笔旅行支出",
                     style = androidx.compose.material3.MaterialTheme.typography.titleLarge.copy(
                         fontWeight = FontWeight.SemiBold,
                     ),
                 )
                 Text(
-                    text = "默认按全员均摊，付款人可单独切换",
+                    text = "可按实际参与人分摊，付款人需在参与人中",
                     color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                     style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
                 )
@@ -981,6 +1252,28 @@ private fun TravelExpenseSheet(
             }
         }
 
+        TravelSectionCard(
+            title = "参与人",
+            subtitle = "只给实际参与的人均摊",
+        ) {
+            if (trip.members.isEmpty()) {
+                Text(
+                    text = "请先添加同行成员",
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(trip.members, key = { it }) { member ->
+                        TravelParticipantChip(
+                            text = member,
+                            selected = member in draft.participantMembers,
+                            onClick = { onToggleParticipant(member) },
+                        )
+                    }
+                }
+            }
+        }
+
         OutlinedTextField(
             value = draft.note,
             onValueChange = onNoteChange,
@@ -1005,7 +1298,7 @@ private fun TravelExpenseSheet(
                 .height(52.dp),
             shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
         ) {
-            Text("确认记账")
+            Text(if (isEditing) "保存修改" else "确认记账")
         }
     }
 }
@@ -1013,6 +1306,8 @@ private fun TravelExpenseSheet(
 @Composable
 private fun TravelTripSheet(
     state: TravelTripCreatorState,
+    newMemberText: String,
+    onNewMemberTextChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onNameChange: (String) -> Unit,
     onDestinationChange: (String) -> Unit,
@@ -1027,7 +1322,6 @@ private fun TravelTripSheet(
     val context = LocalContext.current
     val scrollState = rememberScrollState()
     val members = remember(draft.membersText) { parseTravelMembers(draft.membersText) }
-    var newMemberText by rememberSaveable { mutableStateOf("") }
 
     Column(
         modifier = Modifier
@@ -1169,7 +1463,7 @@ private fun TravelTripSheet(
                 ) {
                     OutlinedTextField(
                         value = newMemberText,
-                        onValueChange = { newMemberText = it },
+                        onValueChange = onNewMemberTextChange,
                         label = { Text("添加成员") },
                         placeholder = { Text("如：张三") },
                         modifier = Modifier.weight(1f),
@@ -1181,7 +1475,7 @@ private fun TravelTripSheet(
                             if (candidate.isNotBlank()) {
                                 val nextMembers = (members + candidate).distinct()
                                 onMembersChange(nextMembers.joinToString("、"))
-                                newMemberText = ""
+                                onNewMemberTextChange("")
                             }
                         },
                         shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
@@ -1244,12 +1538,12 @@ private fun TravelTripSheet(
 @Composable
 private fun TravelMembersSheet(
     trip: TravelTrip,
+    newMemberText: String,
+    onNewMemberTextChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onAddMember: (String) -> Unit,
     onRemoveMember: (String) -> Unit,
 ) {
-    var newMemberText by rememberSaveable { mutableStateOf("") }
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1294,7 +1588,7 @@ private fun TravelMembersSheet(
         ) {
             OutlinedTextField(
                 value = newMemberText,
-                onValueChange = { newMemberText = it },
+                onValueChange = onNewMemberTextChange,
                 label = { Text("添加成员") },
                 placeholder = { Text("如：张三") },
                 modifier = Modifier.weight(1f),
@@ -1305,7 +1599,7 @@ private fun TravelMembersSheet(
                     val candidate = newMemberText.trim()
                     if (candidate.isNotBlank()) {
                         onAddMember(candidate)
-                        newMemberText = ""
+                        onNewMemberTextChange("")
                     }
                 },
                 shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
@@ -1446,6 +1740,30 @@ private fun TravelPayerChip(
 }
 
 @Composable
+private fun TravelParticipantChip(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        color = if (selected) Color(0xFFE3F7EC) else androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant,
+        shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
+        border = BorderStroke(1.dp, if (selected) Color(0xFF2BA06A) else Color.Transparent),
+    ) {
+        Text(
+            text = if (selected) "$text ✓" else text,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(
+                fontWeight = FontWeight.SemiBold,
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
 private fun TravelPill(
     text: String,
     onClick: (() -> Unit)? = null,
@@ -1490,8 +1808,12 @@ private fun TravelTinyChip(
 }
 
 @Composable
-private fun TravelReminderChip(text: String) {
+private fun TravelReminderChip(
+    text: String,
+    onClick: () -> Unit,
+) {
     Surface(
+        onClick = onClick,
         color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant,
         shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
     ) {
@@ -1586,5 +1908,13 @@ private fun travelCategoryVisual(category: TravelExpenseCategory): TravelCategor
             tint = Color(0xFF8A7EE8),
             background = Color(0xFFF0EBFF),
         )
+    }
+}
+
+private fun travelParticipantsLabel(members: List<String>): String {
+    return when (members.size) {
+        0 -> "全员均摊"
+        1 -> "仅 ${members.first()}"
+        else -> "${members.size} 人参与"
     }
 }

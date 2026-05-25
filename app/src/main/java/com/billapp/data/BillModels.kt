@@ -13,6 +13,7 @@ import kotlinx.serialization.Serializable
 data class BillEntry(
     val id: String,
     val amountCents: Long,
+    val type: BillType = BillType.Expense,
     val category: String,
     val note: String = "",
     val dateIso: String,
@@ -23,10 +24,17 @@ data class BillEntry(
 data class BillDraft(
     val id: String? = null,
     val amountText: String = "",
+    val type: BillType = BillType.Expense,
     val category: String = "",
     val note: String = "",
     val date: LocalDate = LocalDate.now(),
 )
+
+@Serializable
+enum class BillType(val label: String) {
+    Expense("支出"),
+    Income("收入"),
+}
 
 enum class StatRange(val label: String) {
     Week("周"),
@@ -50,6 +58,8 @@ data class BillStats(
     val startDate: LocalDate,
     val endDate: LocalDate,
     val totalCents: Long,
+    val incomeCents: Long,
+    val netBalanceCents: Long,
     val averagePerDayCents: Long,
     val totalCount: Int,
     val points: List<StatPoint>,
@@ -98,6 +108,7 @@ fun BillDraft.toEntry(previousCreatedAt: Long = System.currentTimeMillis()): Bil
     return BillEntry(
         id = id ?: java.util.UUID.randomUUID().toString(),
         amountCents = parseMoneyToCents(amountText) ?: 0L,
+        type = type,
         category = category.ifBlank { defaultCategories.first() },
         note = note.trim(),
         dateIso = date.toString(),
@@ -112,6 +123,7 @@ fun BillEntry.toDraft(): BillDraft = BillDraft(
         .movePointLeft(2)
         .setScale(2, RoundingMode.UNNECESSARY)
         .toPlainString(),
+    type = type,
     category = category,
     note = note,
     date = LocalDate.parse(dateIso),
@@ -243,15 +255,19 @@ fun buildBillStats(
     }.takeWhile { !it.isAfter(window.endDate) }
         .toList()
 
+    val expenseEntries = inRange.filter { it.first.type == BillType.Expense }
+    val incomeEntries = inRange.filter { it.first.type == BillType.Income }
+
     val points = when (range) {
-        StatRange.Year -> buildMonthlyPoints(inRange, window.startDate, window.endDate)
-        StatRange.Week, StatRange.Month -> buildDailyPoints(inRange, dailyDates, range)
+        StatRange.Year -> buildMonthlyPoints(expenseEntries, window.startDate, window.endDate)
+        StatRange.Week, StatRange.Month -> buildDailyPoints(expenseEntries, dailyDates, range)
     }
 
-    val totalCents = inRange.sumOf { it.first.amountCents }
+    val totalCents = expenseEntries.sumOf { it.first.amountCents }
+    val incomeCents = incomeEntries.sumOf { it.first.amountCents }
     val dayCount = dailyDates.size.coerceAtLeast(1).toLong()
 
-    val categoryAmounts = inRange
+    val categoryAmounts = expenseEntries
         .groupBy { it.first.category.ifBlank { "其他" } }
         .map { (category, items) ->
             CategoryAmount(
@@ -267,6 +283,8 @@ fun buildBillStats(
         startDate = window.startDate,
         endDate = window.endDate,
         totalCents = totalCents,
+        incomeCents = incomeCents,
+        netBalanceCents = incomeCents - totalCents,
         averagePerDayCents = totalCents / dayCount,
         totalCount = inRange.size,
         points = points,

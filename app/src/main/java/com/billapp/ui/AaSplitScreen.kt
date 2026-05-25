@@ -1,7 +1,9 @@
 package com.billapp.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,12 +28,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fastfood
 import androidx.compose.material.icons.filled.Flight
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocalMall
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.SelfImprovement
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -40,8 +44,8 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -55,10 +59,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -71,39 +77,46 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 private const val AA_PAGE_TITLE = "AA分账"
-private const val AA_SUBTITLE = "先支持单垫付 + 平均分，适合聚餐、旅行、合租"
+private const val AA_SUBTITLE = "支持多笔支出、多垫付人、按参与人归并结算"
 private const val AA_SUMMARY_RECEIVABLE = "待收总额"
 private const val AA_SUMMARY_PENDING = "未结清"
 private const val AA_SUMMARY_MEMBERS = "常用成员"
-private const val AA_RECENT_TITLE = "最近活动"
+private const val AA_RECENT_TITLE = "活动列表"
 private const val AA_MEMBERS_TITLE = "常用成员"
 private const val AA_COMMON_MEMBERS_TITLE = "常用成员"
 private const val AA_COMMON_MEMBERS_EMPTY = "还没有常用成员，先手动添加几位"
 private const val AA_SELECTED_MEMBERS_TITLE = "已选成员"
 private const val AA_EMPTY_TITLE = "还没有AA活动"
-private const val AA_EMPTY_HINT = "先建一笔聚餐或旅行分账试试看"
+private const val AA_EMPTY_HINT = "先建一笔聚餐、旅行或合租分账"
 private const val AA_QUICK_NEW = "新建活动"
 private const val AA_CREATE_TITLE = "新建AA活动"
+private const val AA_EDIT_TITLE = "编辑AA活动"
 private const val AA_CANCEL = "取消"
-private const val AA_SAVE = "生成分账"
+private const val AA_SAVE = "保存"
 private const val AA_TITLE_LABEL = "活动名称"
 private const val AA_TITLE_HINT = "例如：周末聚餐"
 private const val AA_SCENE_LABEL = "场景"
-private const val AA_MEMBERS_LABEL = "参与成员"
-private const val AA_PAYER_LABEL = "垫付人"
-private const val AA_AMOUNT_LABEL = "总金额"
-private const val AA_AMOUNT_HINT = "输入总金额"
+private const val AA_MEMBERS_LABEL = "成员"
+private const val AA_PAYER_LABEL = "默认垫付人"
+private const val AA_AMOUNT_LABEL = "初始金额"
+private const val AA_AMOUNT_HINT = "输入第一笔金额"
 private const val AA_NOTE_LABEL = "备注"
 private const val AA_NOTE_HINT = "可选备注，例如“火锅和饮料”"
 private const val AA_MEMBER_ADD_HINT = "输入成员姓名"
 private const val AA_MEMBER_ADD = "添加"
-private const val AA_SETTLEMENT_TITLE = "结算预览"
+private const val AA_SETTLEMENT_TITLE = "结算结果"
 private const val AA_COPY_RESULT = "复制结果"
-private const val AA_MARK_SETTLED = "标记结清"
-private const val AA_UNMARK_SETTLED = "撤回结清"
+private const val AA_MARK_SETTLED = "标记全结清"
+private const val AA_UNMARK_SETTLED = "撤回全结清"
 private const val AA_DELETE = "删除"
 private const val AA_SETTLED = "已结清"
 private const val AA_UNSETTLED = "待结清"
+
+private enum class AaActivityFilter(val label: String) {
+    All("全部"),
+    Pending("待结清"),
+    Settled("已结清"),
+}
 
 private data class AaSceneVisual(
     val icon: ImageVector,
@@ -149,7 +162,26 @@ fun AaSplitScreen(
     val commonMembers by viewModel.aaCommonMembers.collectAsStateWithLifecycle()
     val uiState by viewModel.aaUiState.collectAsStateWithLifecycle()
     val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     val recentMembers = remember(commonMembers) { commonMembers.take(8) }
+    var filter by rememberSaveable { mutableStateOf(AaActivityFilter.All) }
+    var aaCustomMemberText by rememberSaveable { mutableStateOf("") }
+    var deleteActivityId by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteExpenseTarget by rememberSaveable { mutableStateOf<Pair<String, String>?>(null) }
+    val selectedActivity = uiState.detailActivityId?.let { id ->
+        activities.firstOrNull { it.id == id }
+    }
+    val visibleActivities = remember(activities, filter) {
+        activities
+            .filter { activity ->
+                when (filter) {
+                    AaActivityFilter.All -> true
+                    AaActivityFilter.Pending -> !activity.settled
+                    AaActivityFilter.Settled -> activity.settled
+                }
+            }
+            .sortedWith(compareBy<AaActivity> { it.settled }.thenByDescending { it.createdAt })
+    }
 
     Box(modifier = modifier.fillMaxSize()) {
         if (activities.isEmpty()) {
@@ -163,9 +195,7 @@ fun AaSplitScreen(
                 contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 112.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                item {
-                    AaHeroCard(summary = summary)
-                }
+                item { AaHeroCard(summary = summary) }
                 item {
                     AaMetricStrip(
                         metrics = listOf(
@@ -175,11 +205,7 @@ fun AaSplitScreen(
                         ),
                     )
                 }
-                item {
-                    AaQuickActions(
-                        onCreate = viewModel::openAaCreator,
-                    )
-                }
+                item { AaQuickActions(onCreate = viewModel::openAaCreator) }
                 item {
                     AaSectionCard(title = AA_MEMBERS_TITLE) {
                         AaMemberChips(
@@ -191,6 +217,12 @@ fun AaSplitScreen(
                     }
                 }
                 item {
+                    AaFilterRow(
+                        selected = filter,
+                        onSelect = { filter = it },
+                    )
+                }
+                item {
                     Text(
                         text = AA_RECENT_TITLE,
                         style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(
@@ -198,23 +230,27 @@ fun AaSplitScreen(
                         ),
                     )
                 }
-                items(
-                    items = activities.sortedWith(
-                        compareBy<AaActivity> { it.settled }.thenByDescending { it.createdAt },
-                    ),
-                    key = { it.id },
-                ) { activity ->
+                if (visibleActivities.isEmpty()) {
+                    item {
+                        Text(
+                            text = "当前筛选下没有活动",
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+                items(visibleActivities, key = { it.id }) { activity ->
                     AaActivityCard(
                         activity = activity,
+                        onOpen = { viewModel.openAaDetail(activity.id) },
                         onCopy = {
                             clipboardManager.setText(AnnotatedString(buildAaCopyText(activity)))
+                            Toast.makeText(context, "已复制结算结果", Toast.LENGTH_SHORT).show()
                         },
-                        onToggleSettled = {
-                            viewModel.toggleAaSettled(activity.id)
-                        },
-                        onDelete = {
-                            viewModel.deleteAaActivity(activity.id)
-                        },
+                        onEdit = { viewModel.openAaEditor(activity.id) },
+                        onToggleSettled = { viewModel.toggleAaSettled(activity.id) },
+                        onDelete = { deleteActivityId = activity.id },
                     )
                 }
             }
@@ -228,16 +264,12 @@ fun AaSplitScreen(
                 AaCreatorSheet(
                     uiState = uiState,
                     commonMembers = commonMembers,
+                    customMemberText = aaCustomMemberText,
+                    onCustomMemberTextChange = { aaCustomMemberText = it },
                     onDismiss = viewModel::closeAaCreator,
-                    onTitleChange = { title ->
-                        viewModel.updateAaDraft { it.copy(title = title) }
-                    },
-                    onAmountChange = { amountText ->
-                        viewModel.updateAaDraft { it.copy(amountText = amountText) }
-                    },
-                    onNoteChange = { note ->
-                        viewModel.updateAaDraft { it.copy(note = note) }
-                    },
+                    onTitleChange = { title -> viewModel.updateAaDraft { it.copy(title = title) } },
+                    onAmountChange = { amountText -> viewModel.updateAaDraft { it.copy(amountText = amountText) } },
+                    onNoteChange = { note -> viewModel.updateAaDraft { it.copy(note = note) } },
                     onSceneSelected = viewModel::selectAaScene,
                     onToggleMember = viewModel::toggleAaMember,
                     onAddMember = viewModel::addAaMember,
@@ -246,19 +278,96 @@ fun AaSplitScreen(
                 )
             }
         }
+
+        if (selectedActivity != null && !uiState.open && !uiState.expenseOpen) {
+            ModalBottomSheet(
+                onDismissRequest = viewModel::closeAaDetail,
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                AaDetailSheet(
+                    activity = selectedActivity,
+                    onDismiss = viewModel::closeAaDetail,
+                    onCopy = {
+                        clipboardManager.setText(AnnotatedString(buildAaCopyText(selectedActivity)))
+                        Toast.makeText(context, "已复制结算结果", Toast.LENGTH_SHORT).show()
+                    },
+                    onEditActivity = { viewModel.openAaEditor(selectedActivity.id) },
+                    onAddExpense = { viewModel.openAaExpenseCreator(selectedActivity.id) },
+                    onEditExpense = { expenseId -> viewModel.openAaExpenseEditor(selectedActivity.id, expenseId) },
+                    onDeleteExpense = { expenseId -> deleteExpenseTarget = selectedActivity.id to expenseId },
+                    onToggleTransfer = { key -> viewModel.toggleAaTransferSettled(selectedActivity.id, key) },
+                    onToggleActivitySettled = { viewModel.toggleAaSettled(selectedActivity.id) },
+                )
+            }
+        }
+
+        if (uiState.expenseOpen && selectedActivity != null) {
+            ModalBottomSheet(
+                onDismissRequest = viewModel::closeAaExpenseEditor,
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                AaExpenseSheet(
+                    uiState = uiState,
+                    activity = selectedActivity,
+                    onDismiss = viewModel::closeAaExpenseEditor,
+                    onTitleChange = { title -> viewModel.updateAaExpenseDraft { it.copy(title = title) } },
+                    onAmountChange = { amountText -> viewModel.updateAaExpenseDraft { it.copy(amountText = amountText) } },
+                    onNoteChange = { note -> viewModel.updateAaExpenseDraft { it.copy(note = note) } },
+                    onSelectPayer = viewModel::selectAaExpensePayer,
+                    onToggleMember = viewModel::toggleAaExpenseMember,
+                    onSave = viewModel::saveAaExpenseDraft,
+                )
+            }
+        }
+
+        deleteActivityId?.let { activityId ->
+            val activity = activities.firstOrNull { it.id == activityId }
+            if (activity != null) {
+                ConfirmDeleteDialog(
+                    title = "删除AA活动",
+                    text = "确认删除「${activity.title}」吗？删除后无法恢复。",
+                    onDismiss = { deleteActivityId = null },
+                    onConfirm = {
+                        viewModel.deleteAaActivity(activity.id)
+                        deleteActivityId = null
+                        Toast.makeText(context, "已删除AA活动", Toast.LENGTH_SHORT).show()
+                    },
+                )
+            }
+        }
+
+        deleteExpenseTarget?.let { target ->
+            val activity = activities.firstOrNull { it.id == target.first }
+            val expense = activity?.let { aaExpensesForSettlement(it).firstOrNull { item -> item.id == target.second } }
+            if (activity != null && expense != null) {
+                ConfirmDeleteDialog(
+                    title = "删除支出",
+                    text = "确认删除「${expense.title}」吗？",
+                    onDismiss = { deleteExpenseTarget = null },
+                    onConfirm = {
+                        viewModel.deleteAaExpense(activity.id, expense.id)
+                        deleteExpenseTarget = null
+                        Toast.makeText(context, "已删除支出", Toast.LENGTH_SHORT).show()
+                    },
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun AaHeroCard(summary: AaSummary) {
+    val shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge
     Card(
         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
+        shape = shape,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Box(
             modifier = Modifier
-                .background(AaHeroBackground)
+                .fillMaxWidth()
+                .clip(shape)
+                .background(AaHeroBackground, shape)
                 .padding(18.dp),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -344,9 +453,7 @@ private fun AaMetricStrip(metrics: List<AaMetric>) {
 }
 
 @Composable
-private fun AaQuickActions(
-    onCreate: () -> Unit,
-) {
+private fun AaQuickActions(onCreate: () -> Unit) {
     Button(
         onClick = onCreate,
         modifier = Modifier.fillMaxWidth(),
@@ -355,6 +462,22 @@ private fun AaQuickActions(
         Icon(Icons.Default.Add, contentDescription = null)
         Spacer(modifier = Modifier.size(4.dp))
         Text(AA_QUICK_NEW)
+    }
+}
+
+@Composable
+private fun AaFilterRow(
+    selected: AaActivityFilter,
+    onSelect: (AaActivityFilter) -> Unit,
+) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(AaActivityFilter.entries, key = { it.name }) { filter ->
+            AaChip(
+                text = filter.label,
+                selected = selected == filter,
+                onClick = { onSelect(filter) },
+            )
+        }
     }
 }
 
@@ -413,22 +536,25 @@ private fun AaMemberChips(
 @Composable
 private fun AaActivityCard(
     activity: AaActivity,
+    onOpen: () -> Unit,
     onCopy: () -> Unit,
+    onEdit: () -> Unit,
     onToggleSettled: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val visual = visualForScene(activity.scene)
-    val settlementLines = remember(activity.id, activity.amountCents, activity.payer, activity.members) {
-        buildAaSettlementLines(activity)
-    }
+    val settlementLines = remember(activity) { buildAaSettlementLines(activity) }
     val pendingReceivable = remember(settlementLines) {
-        settlementLines.sumOf { it.amountCents }
+        settlementLines.filterNot { it.settled }.sumOf { it.amountCents }
     }
+    val expenses = remember(activity) { aaExpensesForSettlement(activity) }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface),
         shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -464,7 +590,7 @@ private fun AaActivityCard(
                             ),
                         )
                         Text(
-                            text = "${activity.scene.label} · ${activity.members.size}人 · ${formatAaTime(activity.createdAt)}",
+                            text = "${activity.scene.label} · ${activity.members.size}人 · ${expenses.size}笔 · ${formatAaTime(activity.createdAt)}",
                             color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                             style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
@@ -473,8 +599,13 @@ private fun AaActivityCard(
                     }
                 }
 
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, contentDescription = AA_DELETE)
+                Row {
+                    IconButton(onClick = onEdit) {
+                        Icon(Icons.Default.Edit, contentDescription = "编辑")
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = AA_DELETE)
+                    }
                 }
             }
 
@@ -484,7 +615,7 @@ private fun AaActivityCard(
                     selected = activity.settled,
                 )
                 AaStatusChip(
-                    text = "总额 ${formatMoney(activity.amountCents)}",
+                    text = "总额 ${formatMoney(aaTotalAmountCents(activity))}",
                     selected = false,
                 )
                 AaStatusChip(
@@ -492,15 +623,6 @@ private fun AaActivityCard(
                     selected = false,
                 )
             }
-
-            Text(
-                text = "付款人：${activity.payer}",
-                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(
-                    fontWeight = FontWeight.Medium,
-                ),
-            )
-
-            HorizontalDivider()
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
@@ -511,21 +633,21 @@ private fun AaActivityCard(
                 )
                 if (settlementLines.isEmpty()) {
                     Text(
-                        text = "当前分摊没有可转账项",
+                        text = "当前没有可转账项",
                         color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                         style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
                     )
                 } else {
                     settlementLines.take(3).forEach { line ->
                         Text(
-                            text = "${line.debtor} → ${line.creditor} ${formatMoney(line.amountCents)}",
+                            text = "${line.debtor} → ${line.creditor} ${formatMoney(line.amountCents)}${if (line.settled) " · 已收" else ""}",
                             style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
                         )
                     }
                     if (settlementLines.size > 3) {
                         Text(
-                            text = "还有 ${settlementLines.size - 3} 笔",
-                            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = "点开查看全部 ${settlementLines.size} 笔结算",
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.primary,
                             style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -541,6 +663,206 @@ private fun AaActivityCard(
                     Text(if (activity.settled) AA_UNMARK_SETTLED else AA_MARK_SETTLED)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AaDetailSheet(
+    activity: AaActivity,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+    onEditActivity: () -> Unit,
+    onAddExpense: () -> Unit,
+    onEditExpense: (String) -> Unit,
+    onDeleteExpense: (String) -> Unit,
+    onToggleTransfer: (String) -> Unit,
+    onToggleActivitySettled: () -> Unit,
+) {
+    val scrollState = rememberScrollState()
+    val expenses = remember(activity) { aaExpensesForSettlement(activity).sortedByDescending { it.createdAt } }
+    val lines = remember(activity) { buildAaSettlementLines(activity) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .verticalScroll(scrollState),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        SheetHandle()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
+                Text(
+                    text = activity.title,
+                    style = androidx.compose.material3.MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                Text(
+                    text = "${activity.scene.label} · ${activity.members.joinToString("、")}",
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            TextButton(onClick = onDismiss) {
+                Text(AA_CANCEL)
+            }
+        }
+
+        AaSectionCard(title = "支出明细") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onAddExpense, shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Text("新增支出")
+                }
+                OutlinedButton(onClick = onEditActivity, shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge) {
+                    Text("编辑活动")
+                }
+            }
+            expenses.forEach { expense ->
+                AaExpenseRow(
+                    expense = expense,
+                    canDelete = expenses.size > 1,
+                    onEdit = { onEditExpense(expense.id) },
+                    onDelete = { onDeleteExpense(expense.id) },
+                )
+            }
+        }
+
+        AaSectionCard(title = AA_SETTLEMENT_TITLE) {
+            if (lines.isEmpty()) {
+                Text(
+                    text = "当前没有可转账项",
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                lines.forEach { line ->
+                    AaSettlementLineRow(
+                        line = line,
+                        onToggle = { onToggleTransfer(line.key) },
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onCopy) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null)
+                    Text(AA_COPY_RESULT)
+                }
+                TextButton(onClick = onToggleActivitySettled) {
+                    Text(if (activity.settled) AA_UNMARK_SETTLED else AA_MARK_SETTLED)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AaExpenseRow(
+    expense: AaExpense,
+    canDelete: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Surface(
+        color = Color(0xFFF8F6FB),
+        shape = androidx.compose.material3.MaterialTheme.shapes.large,
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = expense.title,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyLarge.copy(
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                    Text(
+                        text = "${expense.payer}垫付 · ${expense.members.size}人参与",
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                    )
+                    if (expense.note.isNotBlank()) {
+                        Text(
+                            text = expense.note,
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                Text(
+                    text = formatMoney(expense.amountCents),
+                    style = androidx.compose.material3.MaterialTheme.typography.bodyLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                    ),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onEdit) {
+                    Text("编辑")
+                }
+                if (canDelete) {
+                    TextButton(onClick = onDelete) {
+                        Text(
+                            text = "删除",
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AaSettlementLineRow(
+    line: AaSettlementLine,
+    onToggle: () -> Unit,
+) {
+    Surface(
+        color = if (line.settled) Color(0xFFE7F6EC) else Color(0xFFFFF8E1),
+        shape = androidx.compose.material3.MaterialTheme.shapes.large,
+        onClick = onToggle,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "${line.debtor} → ${line.creditor}",
+                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                Text(
+                    text = if (line.settled) "已确认收款" else "点按标记为已收",
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                )
+            }
+            Text(
+                text = formatMoney(line.amountCents),
+                style = androidx.compose.material3.MaterialTheme.typography.bodyLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                ),
+            )
         }
     }
 }
@@ -689,10 +1011,8 @@ private fun AaEmptyState(
                 color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = onCreate) {
-                    Text(AA_QUICK_NEW)
-                }
+            Button(onClick = onCreate) {
+                Text(AA_QUICK_NEW)
             }
         }
     }
@@ -702,6 +1022,8 @@ private fun AaEmptyState(
 private fun AaCreatorSheet(
     uiState: AaUiState,
     commonMembers: List<String>,
+    customMemberText: String,
+    onCustomMemberTextChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onTitleChange: (String) -> Unit,
     onAmountChange: (String) -> Unit,
@@ -713,8 +1035,8 @@ private fun AaCreatorSheet(
     onSave: () -> Unit,
 ) {
     val draft = uiState.draft
-    var customMemberText by rememberSaveable { mutableStateOf("") }
     val scrollState = rememberScrollState()
+    val isEditing = uiState.editingActivityId != null
 
     Column(
         modifier = Modifier
@@ -724,12 +1046,7 @@ private fun AaCreatorSheet(
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterHorizontally)
-                .size(width = 52.dp, height = 6.dp)
-                .background(Color(0xFFE6E4EB), androidx.compose.material3.MaterialTheme.shapes.extraLarge),
-        )
+        SheetHandle()
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -737,7 +1054,7 @@ private fun AaCreatorSheet(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = AA_CREATE_TITLE,
+                text = if (isEditing) AA_EDIT_TITLE else AA_CREATE_TITLE,
                 style = androidx.compose.material3.MaterialTheme.typography.titleLarge.copy(
                     fontWeight = FontWeight.SemiBold,
                 ),
@@ -800,7 +1117,7 @@ private fun AaCreatorSheet(
                 ) {
                     OutlinedTextField(
                         value = customMemberText,
-                        onValueChange = { customMemberText = it },
+                        onValueChange = onCustomMemberTextChange,
                         label = { Text(AA_MEMBER_ADD_HINT) },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
@@ -810,7 +1127,7 @@ private fun AaCreatorSheet(
                             val candidate = customMemberText.trim()
                             if (candidate.isNotBlank()) {
                                 onAddMember(candidate)
-                                customMemberText = ""
+                                onCustomMemberTextChange("")
                             }
                         },
                         shape = androidx.compose.material3.MaterialTheme.shapes.large,
@@ -841,7 +1158,7 @@ private fun AaCreatorSheet(
         AaSectionCard(title = AA_PAYER_LABEL) {
             if (draft.members.isEmpty()) {
                 Text(
-                    text = "先选成员，再指定垫付人",
+                    text = "先选成员，再指定默认垫付人",
                     color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
@@ -857,7 +1174,7 @@ private fun AaCreatorSheet(
         OutlinedTextField(
             value = draft.amountText,
             onValueChange = onAmountChange,
-            label = { Text(AA_AMOUNT_LABEL) },
+            label = { Text(if (isEditing) "当前总额" else AA_AMOUNT_LABEL) },
             placeholder = { Text(AA_AMOUNT_HINT) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
@@ -891,4 +1208,165 @@ private fun AaCreatorSheet(
             Text(AA_SAVE)
         }
     }
+}
+
+@Composable
+private fun AaExpenseSheet(
+    uiState: AaUiState,
+    activity: AaActivity,
+    onDismiss: () -> Unit,
+    onTitleChange: (String) -> Unit,
+    onAmountChange: (String) -> Unit,
+    onNoteChange: (String) -> Unit,
+    onSelectPayer: (String) -> Unit,
+    onToggleMember: (String) -> Unit,
+    onSave: () -> Unit,
+) {
+    val draft = uiState.expenseDraft
+    val scrollState = rememberScrollState()
+    val isEditing = uiState.editingExpenseId != null
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .verticalScroll(scrollState),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        SheetHandle()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = if (isEditing) "编辑支出" else "新增支出",
+                    style = androidx.compose.material3.MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                Text(
+                    text = "只给实际参与的人均摊，系统会自动归并转账",
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                )
+            }
+            TextButton(onClick = onDismiss) {
+                Text(AA_CANCEL)
+            }
+        }
+
+        OutlinedTextField(
+            value = draft.title,
+            onValueChange = onTitleChange,
+            label = { Text("支出名称") },
+            placeholder = { Text("例如：火锅、打车、门票") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+
+        OutlinedTextField(
+            value = draft.amountText,
+            onValueChange = onAmountChange,
+            label = { Text("金额") },
+            placeholder = { Text("输入金额") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+
+        AaSectionCard(title = "垫付人") {
+            AaMemberChips(
+                members = activity.members,
+                selectedMembers = listOf(draft.payer),
+                onMemberClick = onSelectPayer,
+            )
+        }
+
+        AaSectionCard(title = "参与人") {
+            AaMemberChips(
+                members = activity.members,
+                selectedMembers = draft.members,
+                onMemberClick = onToggleMember,
+            )
+        }
+
+        OutlinedTextField(
+            value = draft.note,
+            onValueChange = onNoteChange,
+            label = { Text(AA_NOTE_LABEL) },
+            placeholder = { Text("可选，例如“李四没喝酒”") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+
+        uiState.expenseError?.let {
+            Text(
+                text = it,
+                color = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+            )
+        }
+
+        Button(
+            onClick = onSave,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 52.dp),
+            shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
+        ) {
+            Text(if (isEditing) "保存支出" else "添加支出")
+        }
+    }
+}
+
+@Composable
+private fun SheetHandle() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 52.dp, height = 6.dp)
+                .background(Color(0xFFE6E4EB), androidx.compose.material3.MaterialTheme.shapes.extraLarge),
+        )
+    }
+}
+
+@Composable
+private fun ConfirmDeleteDialog(
+    title: String,
+    text: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Delete,
+                contentDescription = null,
+                tint = androidx.compose.material3.MaterialTheme.colorScheme.error,
+            )
+        },
+        title = { Text(title) },
+        text = { Text(text) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = "删除",
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(AA_CANCEL)
+            }
+        },
+    )
 }
