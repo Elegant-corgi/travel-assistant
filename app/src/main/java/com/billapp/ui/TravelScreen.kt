@@ -20,8 +20,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,6 +35,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -823,6 +825,7 @@ private fun TravelExpenseSection(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TravelExpenseRow(
     expense: TravelExpense,
@@ -837,16 +840,12 @@ private fun TravelExpenseRow(
         shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        BoxWithConstraints(
-            modifier = Modifier.padding(14.dp),
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val actionWeight = when {
-                maxWidth < 360.dp -> 0.48f
-                maxWidth < 440.dp -> 0.42f
-                else -> 0.34f
-            }
-            val detailWeight = 1f - actionWeight
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -866,30 +865,49 @@ private fun TravelExpenseRow(
                 }
 
                 Column(
-                    modifier = Modifier.weight(detailWeight),
+                    modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = expense.title,
-                            style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.SemiBold,
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        TravelTinyChip(
-                            text = if (expense.settled) "已结清" else "待结算",
-                            selected = expense.settled,
-                        )
-                    }
+                    Text(
+                        text = expense.title,
+                        modifier = Modifier.fillMaxWidth(),
+                        style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    TravelTinyChip(
+                        text = if (expense.settled) "已结清" else "待结算",
+                        selected = expense.settled,
+                    )
+                }
+
+                Text(
+                    text = formatMoney(expense.amountCents),
+                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     Text(
                         text = "${expense.category.label} · 付款人 ${expense.payer} · ${travelParticipantsLabel(expense.members)}",
                         color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                         style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     if (expense.note.isNotBlank()) {
                         Text(
@@ -903,41 +921,34 @@ private fun TravelExpenseRow(
                 }
 
                 TravelExpenseActions(
-                    expense = expense,
+                    settled = expense.settled,
                     onEdit = onEdit,
                     onToggleSettled = onToggleSettled,
                     onDelete = onDelete,
-                    modifier = Modifier.weight(actionWeight),
                 )
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TravelExpenseActions(
-    expense: TravelExpense,
+    settled: Boolean,
     onEdit: () -> Unit,
     onToggleSettled: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier,
+        modifier = modifier.widthIn(min = 104.dp, max = 132.dp),
         horizontalAlignment = Alignment.End,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(
-            text = formatMoney(expense.amountCents),
-            style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(
-                fontWeight = FontWeight.Bold,
-            ),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(0.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalArrangement = Arrangement.spacedBy(0.dp),
         ) {
             TextButton(
                 onClick = onEdit,
@@ -951,17 +962,18 @@ private fun TravelExpenseActions(
                 modifier = Modifier.defaultMinSize(minWidth = 1.dp),
                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
             ) {
-                Text(if (expense.settled) "撤回" else "结清", maxLines = 1)
+                Text(if (settled) "撤回" else "结清", maxLines = 1)
             }
-            IconButton(
+            TextButton(
                 onClick = onDelete,
-                modifier = Modifier.size(32.dp),
+                modifier = Modifier.defaultMinSize(minWidth = 1.dp),
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
             ) {
                 Icon(
                     imageVector = Icons.Default.Delete,
                     contentDescription = "删除",
                     tint = androidx.compose.material3.MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
