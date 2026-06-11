@@ -70,5 +70,7 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.24")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

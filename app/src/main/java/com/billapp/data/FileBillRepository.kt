@@ -37,6 +37,19 @@ class FileBillRepository(context: Context) : BillRepository {
         }
     }
 
+    override suspend fun upsertAll(entries: List<BillEntry>) {
+        if (entries.isEmpty()) return
+        withContext(Dispatchers.IO) {
+            val updatedById = _bills.value.associateBy { it.id }.toMutableMap()
+            entries.forEach { entry ->
+                updatedById[entry.id] = entry
+            }
+            val updated = updatedById.values.sortedWith(entryComparator())
+            _bills.value = updated
+            save(updated)
+        }
+    }
+
     override suspend fun delete(id: String) {
         withContext(Dispatchers.IO) {
             val updated = _bills.value.filterNot { it.id == id }.sortedWith(entryComparator())

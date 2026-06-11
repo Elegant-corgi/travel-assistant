@@ -19,6 +19,7 @@ import com.billapp.data.TravelRepository
 import com.billapp.data.TravelTrip
 import com.billapp.data.TravelWorkspace
 import com.billapp.data.TravelUiState
+import com.billapp.data.WechatBillImporter
 import com.billapp.data.addTravelChecklistItem as addTravelChecklistItemToTrip
 import com.billapp.data.addTravelReminder as addTravelReminderToTrip
 import com.billapp.data.currentTravelTrip as currentTravelTripFromWorkspace
@@ -73,6 +74,12 @@ data class LedgerFilterState(
     val category: String? = null,
 )
 
+data class WechatImportUiState(
+    val importing: Boolean = false,
+    val message: String? = null,
+    val error: String? = null,
+)
+
 class BillViewModel(
     private val billRepository: BillRepository,
     private val aaRepository: AaRepository,
@@ -123,6 +130,9 @@ class BillViewModel(
 
     private val _ledgerFilter = MutableStateFlow(LedgerFilterState())
     val ledgerFilter: StateFlow<LedgerFilterState> = _ledgerFilter
+
+    private val _wechatImportState = MutableStateFlow(WechatImportUiState())
+    val wechatImportState: StateFlow<WechatImportUiState> = _wechatImportState
 
     val monthlyBudgetText: StateFlow<String> = billRepository.monthlyBudgetText
 
@@ -694,6 +704,43 @@ class BillViewModel(
             billRepository.upsert(entry)
             _editorState.value = EditorState()
         }
+    }
+
+    fun importWechatBill(content: ByteArray) {
+        if (_wechatImportState.value.importing) return
+        _wechatImportState.value = WechatImportUiState(importing = true)
+        viewModelScope.launch {
+            val result = runCatching {
+                WechatBillImporter.parse(content)
+            }.getOrElse { error ->
+                _wechatImportState.value = WechatImportUiState(error = "导入失败：${error.message ?: "文件无法解析"}")
+                return@launch
+            }
+
+            if (result.entries.isEmpty()) {
+                val detail = result.errorMessages.firstOrNull()?.let { "，$it" }.orEmpty()
+                _wechatImportState.value = WechatImportUiState(error = "没有可导入的微信账单$detail")
+                return@launch
+            }
+
+            runCatching {
+                billRepository.upsertAll(result.entries)
+            }.onSuccess {
+                val skippedText = if (result.skippedCount > 0) "，跳过 ${result.skippedCount} 笔" else ""
+                val errorText = result.errorMessages.takeIf { it.isNotEmpty() }
+                    ?.joinToString(separator = "\n", prefix = "\n") { it }
+                    .orEmpty()
+                _wechatImportState.value = WechatImportUiState(
+                    message = "已导入/更新 ${result.entries.size} 笔微信账单$skippedText$errorText",
+                )
+            }.onFailure { error ->
+                _wechatImportState.value = WechatImportUiState(error = "保存失败：${error.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    fun clearWechatImportMessage() {
+        _wechatImportState.value = WechatImportUiState()
     }
 
     fun saveAaDraft() {

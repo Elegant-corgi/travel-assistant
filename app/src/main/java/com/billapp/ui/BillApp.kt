@@ -1,6 +1,9 @@
 package com.billapp.ui
 
 import android.app.DatePickerDialog
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -34,6 +37,7 @@ import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Checkroom
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Fastfood
@@ -59,6 +63,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.VolunteerActivism
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material.icons.filled.Train
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -126,12 +131,15 @@ import com.billapp.data.removeLastAmountInput
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val APP_TITLE = "\u4e2a\u4eba\u8d26\u5355"
 private const val AA_TITLE = "AA\u5206\u8d26"
 private const val OPEN_MENU = "\u6253\u5f00\u529f\u80fd\u5217\u8868"
 private const val ADD_BILL = "\u65b0\u589e\u8d26\u5355"
+private const val IMPORT_WECHAT_BILL = "导入微信账单"
 private const val ADD_AA = "新建AA\u5206\u8d26"
 private const val DRAWER_TITLE = "\u529f\u80fd\u5217\u8868"
 private const val EMPTY_TITLE = "\u8fd8\u6ca1\u6709\u8d26\u5355"
@@ -144,6 +152,7 @@ private const val CANCEL_TEXT = "\u53d6\u6d88"
 private const val CATEGORY_HINT = "\u5148\u9009\u62e9\u8fd9\u7b14\u8d26\u7684\u7c7b\u578b"
 private const val NOTE_LABEL = "\u5907\u6ce8"
 private const val NOTE_PLACEHOLDER = "\u8fd9\u91cc\u8f93\u5165\u5907\u6ce8"
+private const val CLEAR_NOTE = "清除备注"
 private const val DATE_TEXT = "\u65e5\u671f"
 private const val STATS_COUNT_TEXT = "\u7edf\u8ba1\u8303\u56f4\u5185\u5171 %d \u7b14\u652f\u51fa"
 private const val TOTAL_EXPENSE_TEXT = "\u603b\u652f\u51fa"
@@ -251,10 +260,27 @@ fun BillApp(viewModel: BillViewModel) {
     val range by viewModel.statRange.collectAsStateWithLifecycle()
     val monthlyBudgetText by viewModel.monthlyBudgetText.collectAsStateWithLifecycle()
     val editorState by viewModel.editorState.collectAsStateWithLifecycle()
+    val wechatImportState by viewModel.wechatImportState.collectAsStateWithLifecycle()
     val prioritizedCategories by viewModel.prioritizedCategories.collectAsStateWithLifecycle()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
     var pendingDeleteBill by remember { mutableStateOf<BillEntry?>(null) }
+    val wechatImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            val content = withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            }
+            if (content == null) {
+                Toast.makeText(context, "无法读取微信账单文件", Toast.LENGTH_SHORT).show()
+            } else {
+                viewModel.importWechatBill(content)
+            }
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -291,6 +317,22 @@ fun BillApp(viewModel: BillViewModel) {
                         }
                     },
                     actions = {
+                        if (selectedSection == AppSection.Billing && selectedTab == AppTab.Ledger) {
+                            IconButton(
+                                onClick = {
+                                    wechatImportLauncher.launch(
+                                        arrayOf(
+                                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                            "application/vnd.ms-excel",
+                                            "application/octet-stream",
+                                        ),
+                                    )
+                                },
+                                enabled = !wechatImportState.importing,
+                            ) {
+                                Icon(Icons.Default.UploadFile, contentDescription = IMPORT_WECHAT_BILL)
+                            }
+                        }
                         if (selectedSection == AppSection.Travel) {
                             IconButton(onClick = viewModel::openTravelTripCreator) {
                                 Icon(Icons.Default.Add, contentDescription = "创建出行计划")
@@ -395,6 +437,32 @@ fun BillApp(viewModel: BillViewModel) {
                 }
             }
         }
+    }
+
+    wechatImportState.message?.let { message ->
+        AlertDialog(
+            onDismissRequest = viewModel::clearWechatImportMessage,
+            title = { Text("微信账单导入完成") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = viewModel::clearWechatImportMessage) {
+                    Text(CONFIRM_TEXT)
+                }
+            },
+        )
+    }
+
+    wechatImportState.error?.let { error ->
+        AlertDialog(
+            onDismissRequest = viewModel::clearWechatImportMessage,
+            title = { Text("微信账单导入失败") },
+            text = { Text(error) },
+            confirmButton = {
+                TextButton(onClick = viewModel::clearWechatImportMessage) {
+                    Text(CONFIRM_TEXT)
+                }
+            },
+        )
     }
 
     if (editorState.open) {
@@ -1509,6 +1577,17 @@ private fun AmountEditorContent(
                             },
                             label = { Text(NOTE_LABEL) },
                             placeholder = { Text(NOTE_PLACEHOLDER) },
+                            trailingIcon = {
+                                if (draft.note.isNotBlank()) {
+                                    IconButton(
+                                        onClick = {
+                                            onDraftChange { it.copy(note = "") }
+                                        },
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = CLEAR_NOTE)
+                                    }
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             shape = MaterialTheme.shapes.large,

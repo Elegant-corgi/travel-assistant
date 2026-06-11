@@ -8,6 +8,8 @@ interface BillRepository {
 
     suspend fun upsert(entry: BillEntry)
 
+    suspend fun upsertAll(entries: List<BillEntry>)
+
     suspend fun delete(id: String)
 
     suspend fun updateMonthlyBudget(budgetText: String)
