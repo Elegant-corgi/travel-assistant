@@ -16,6 +16,7 @@ import com.billapp.data.TravelExpenseDraft
 import com.billapp.data.TravelTripCreatorState
 import com.billapp.data.TravelTripDraft
 import com.billapp.data.TravelRepository
+import com.billapp.data.TravelShareParser
 import com.billapp.data.TravelTrip
 import com.billapp.data.TravelWorkspace
 import com.billapp.data.TravelUiState
@@ -397,7 +398,7 @@ class BillViewModel(
     }
 
     fun closeTravelExpenseCreator() {
-        _travelUiState.update { it.copy(open = false, error = null) }
+        _travelUiState.update { it.copy(open = false, error = null, shareMessage = null) }
     }
 
     fun openTravelTripCreator() {
@@ -450,6 +451,69 @@ class BillViewModel(
         _travelUiState.update { current ->
             current.copy(draft = transform(current.draft), error = null)
         }
+    }
+
+    fun handleTravelShareText(text: String): String {
+        selectSection(AppSection.Travel)
+        val trip = selectedTravelTrip.value
+        if (trip == null) {
+            val message = "请先创建一个出行计划"
+            _travelUiState.update { it.copy(open = false, error = message, shareMessage = message) }
+            return message
+        }
+
+        val parsed = TravelShareParser.parse(text)
+        _travelUiState.update { current ->
+            val baseDraft = if (current.editingExpenseId == null && current.draft.hasInput()) {
+                current.draft
+            } else {
+                defaultTravelExpenseDraft(
+                    defaultPayer = trip.members.firstOrNull().orEmpty(),
+                    participantMembers = trip.members,
+                )
+            }
+            current.copy(
+                open = true,
+                draft = baseDraft.copy(
+                    title = baseDraft.title.ifBlank { parsed.title.orEmpty() },
+                    amountText = baseDraft.amountText.ifBlank { parsed.amountText.orEmpty() },
+                ),
+                editingExpenseId = null,
+                error = null,
+                shareMessage = parsed.message,
+            )
+        }
+        return parsed.message
+    }
+
+    fun handleTravelShareImage(): String {
+        selectSection(AppSection.Travel)
+        val trip = selectedTravelTrip.value
+        if (trip == null) {
+            val message = "请先创建一个出行计划"
+            _travelUiState.update { it.copy(open = false, error = message, shareMessage = message) }
+            return message
+        }
+
+        val message = "已接收图片，请手动填写支出信息"
+        _travelUiState.update { current ->
+            val baseDraft = if (current.editingExpenseId == null && current.draft.hasInput()) {
+                current.draft
+            } else {
+                defaultTravelExpenseDraft(
+                    defaultPayer = trip.members.firstOrNull().orEmpty(),
+                    participantMembers = trip.members,
+                )
+            }
+            current.copy(
+                open = true,
+                draft = baseDraft,
+                editingExpenseId = null,
+                error = null,
+                shareMessage = message,
+            )
+        }
+        return message
     }
 
     fun updateTravelTripDraft(transform: (TravelTripDraft) -> TravelTripDraft) {
