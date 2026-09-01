@@ -82,7 +82,6 @@ data class TravelUiState(
     val draft: TravelExpenseDraft = defaultTravelExpenseDraft(),
     val editingExpenseId: String? = null,
     val error: String? = null,
-    val shareMessage: String? = null,
 )
 
 data class TravelTripCreatorState(

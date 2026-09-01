@@ -1318,21 +1318,6 @@ private fun TravelExpenseSheet(
             singleLine = true,
         )
 
-        uiState.shareMessage?.let { message ->
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = androidx.compose.material3.MaterialTheme.shapes.medium,
-                color = androidx.compose.material3.MaterialTheme.colorScheme.primaryContainer,
-            ) {
-                Text(
-                    text = message,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    color = androidx.compose.material3.MaterialTheme.colorScheme.onPrimaryContainer,
-                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-
         TravelSectionCard(title = "类别") {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(TravelExpenseCategory.entries, key = { it.name }) { category ->
