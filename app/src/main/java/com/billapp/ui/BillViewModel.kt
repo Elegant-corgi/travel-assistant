@@ -34,6 +34,7 @@ import com.billapp.data.parseMoneyToCents
 import com.billapp.data.parseTravelMembers
 import com.billapp.data.sortCategoriesByUsage
 import com.billapp.data.newTravelTripFromDraft
+import com.billapp.data.normalizeTravelExpenseTitle
 import com.billapp.data.toDraft
 import com.billapp.data.toEntry
 import com.billapp.data.replaceCurrentTravelTrip
@@ -42,6 +43,8 @@ import com.billapp.data.toggleTravelChecklist as toggleTravelChecklistTrip
 import com.billapp.data.toggleTravelExpenseSettled as toggleTravelExpenseSettledTrip
 import com.billapp.data.upsertTravelExpense
 import com.billapp.data.upsertTravelTrip
+import com.billapp.data.travelEndDate
+import com.billapp.data.travelStartDate
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -58,8 +61,8 @@ enum class AppTab(val label: String) {
 }
 
 enum class AppSection(val label: String) {
-    Billing("\u8ba1\u8d39"),
     Travel("旅行助手"),
+    Billing("\u8ba1\u8d39"),
     AaSplit("AA\u5206\u8d26"),
 }
 
@@ -87,7 +90,7 @@ class BillViewModel(
 ) : ViewModel() {
     val bills: StateFlow<List<BillEntry>> = billRepository.bills
 
-    private val _selectedSection = MutableStateFlow(AppSection.Billing)
+    private val _selectedSection = MutableStateFlow(AppSection.Travel)
     val selectedSection: StateFlow<AppSection> = _selectedSection
 
     private val _selectedTab = MutableStateFlow(AppTab.Ledger)
@@ -404,10 +407,25 @@ class BillViewModel(
         _travelTripCreatorState.update { current ->
             current.copy(
                 open = true,
-                draft = current.draft.takeIf { it.hasInput() } ?: defaultTravelTripDraft(),
+                draft = if (current.editingTripId == null && current.draft.hasInput()) {
+                    current.draft
+                } else {
+                    defaultTravelTripDraft()
+                },
+                editingTripId = null,
                 error = null,
             )
         }
+    }
+
+    fun openTravelTripEditor() {
+        val trip = selectedTravelTrip.value ?: return
+        _travelTripCreatorState.value = TravelTripCreatorState(
+            open = true,
+            draft = trip.toTravelTripDraft(),
+            editingTripId = trip.id,
+            error = null,
+        )
     }
 
     fun closeTravelTripCreator() {
@@ -889,7 +907,7 @@ class BillViewModel(
             _travelUiState.update { it.copy(error = "请先创建一个出行计划") }
             return
         }
-        val title = currentDraft.title.trim()
+        val title = normalizeTravelExpenseTitle(currentDraft.title, currentDraft.category)
         if (title.isBlank()) {
             _travelUiState.update { it.copy(error = "请先输入支出名称") }
             return
@@ -950,7 +968,8 @@ class BillViewModel(
     }
 
     fun saveTravelTrip() {
-        val currentDraft = _travelTripCreatorState.value.draft
+        val creatorState = _travelTripCreatorState.value
+        val currentDraft = creatorState.draft
         val name = currentDraft.name.trim()
         if (name.isBlank()) {
             _travelTripCreatorState.update { it.copy(error = "请先输入行程名称") }
@@ -961,21 +980,46 @@ class BillViewModel(
             _travelTripCreatorState.update { it.copy(error = "请先输入目的地") }
             return
         }
-        val members = com.billapp.data.parseTravelMembers(currentDraft.membersText)
-        if (members.isEmpty()) {
-            _travelTripCreatorState.update { it.copy(error = "请至少填写 1 位同行成员") }
-            return
+        val safeEndDate = if (currentDraft.endDate.isBefore(currentDraft.startDate)) {
+            currentDraft.startDate
+        } else {
+            currentDraft.endDate
         }
-
-        val draft = currentDraft.copy(
-            name = name,
-            destination = destination,
-            membersText = members.joinToString("、"),
-        )
-        val trip = newTravelTripFromDraft(draft)
+        val budget = parseMoneyToCents(currentDraft.budgetText) ?: 0L
 
         viewModelScope.launch {
-            travelRepository.update(upsertTravelTrip(travelWorkspace.value, trip))
+            val editingTripId = creatorState.editingTripId
+            val workspace = travelWorkspace.value
+            if (editingTripId == null) {
+                val members = com.billapp.data.parseTravelMembers(currentDraft.membersText)
+                if (members.isEmpty()) {
+                    _travelTripCreatorState.update { it.copy(error = "请至少填写 1 位同行成员") }
+                    return@launch
+                }
+                val draft = currentDraft.copy(
+                    name = name,
+                    destination = destination,
+                    endDate = safeEndDate,
+                    budgetText = currentDraft.budgetText.trim(),
+                    membersText = members.joinToString("、"),
+                )
+                travelRepository.update(upsertTravelTrip(workspace, newTravelTripFromDraft(draft)))
+            } else {
+                val trip = workspace.trips.firstOrNull { it.id == editingTripId } ?: return@launch
+                travelRepository.update(
+                    upsertTravelTrip(
+                        workspace,
+                        trip.copy(
+                            name = name,
+                            destination = destination,
+                            startDateIso = currentDraft.startDate.toString(),
+                            endDateIso = safeEndDate.toString(),
+                            isOverseas = currentDraft.isOverseas,
+                            budgetCents = budget,
+                        ),
+                    ),
+                )
+            }
             _travelTripCreatorState.value = TravelTripCreatorState()
         }
     }
@@ -1181,6 +1225,18 @@ private fun TravelTripDraft.hasInput(): Boolean {
         startDate != emptyDraft.startDate ||
         endDate != emptyDraft.endDate ||
         isOverseas != emptyDraft.isOverseas
+}
+
+private fun TravelTrip.toTravelTripDraft(): TravelTripDraft {
+    return TravelTripDraft(
+        name = name,
+        destination = destination,
+        startDate = travelStartDate(this),
+        endDate = travelEndDate(this),
+        isOverseas = isOverseas,
+        budgetText = budgetCents.takeIf { it > 0L }?.let { formatCentsForInput(it) }.orEmpty(),
+        membersText = members.joinToString("、"),
+    )
 }
 
 class BillViewModelFactory(

@@ -87,6 +87,7 @@ data class TravelUiState(
 data class TravelTripCreatorState(
     val open: Boolean = false,
     val draft: TravelTripDraft = defaultTravelTripDraft(),
+    val editingTripId: String? = null,
     val error: String? = null,
 )
 
@@ -127,6 +128,17 @@ fun defaultTravelExpenseDraft(
     payer = defaultPayer,
     participantMembers = participantMembers,
 )
+
+fun normalizeTravelExpenseTitle(
+    title: String,
+    category: TravelExpenseCategory,
+): String {
+    val normalized = title.trim()
+    if (normalized.isBlank() || category != TravelExpenseCategory.Tickets || "门票" in normalized) {
+        return normalized
+    }
+    return "${normalized}门票"
+}
 
 fun defaultTravelTripDraft(now: LocalDate = LocalDate.now()): TravelTripDraft = TravelTripDraft(
     startDate = now,
