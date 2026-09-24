@@ -190,6 +190,8 @@ fun TravelScreen(
     val swipeThreshold = with(LocalDensity.current) { 40.dp.toPx() }
     var showDeleteTripDialog by rememberSaveable { mutableStateOf(false) }
     var showTripMembersSheet by rememberSaveable { mutableStateOf(false) }
+    var showTravelCategoryDetailsSheet by rememberSaveable { mutableStateOf(false) }
+    var showTravelSettlementDetailsSheet by rememberSaveable { mutableStateOf(false) }
     var travelBillActionTripId by rememberSaveable { mutableStateOf<String?>(null) }
     var tripMemberSheetText by rememberSaveable { mutableStateOf("") }
     var tripCreatorMemberText by rememberSaveable { mutableStateOf("") }
@@ -311,6 +313,12 @@ fun TravelScreen(
                             onCopySettlement = {
                                 travelBillActionTripId = currentTrip.id
                             },
+                            onOpenCategoryDetails = {
+                                showTravelCategoryDetailsSheet = true
+                            },
+                            onOpenSettlementDetails = {
+                                showTravelSettlementDetailsSheet = true
+                            },
                         )
                     }
                     item {
@@ -416,6 +424,36 @@ fun TravelScreen(
                     onDismiss = { showTripMembersSheet = false },
                     onAddMember = viewModel::addTravelMember,
                     onRemoveMember = viewModel::removeTravelMember,
+                )
+            }
+        }
+
+        if (showTravelCategoryDetailsSheet && selectedTravelTrip != null) {
+            ModalBottomSheet(
+                onDismissRequest = { showTravelCategoryDetailsSheet = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                TravelCategoryDetailsSheet(
+                    trip = selectedTravelTrip,
+                    onDismiss = { showTravelCategoryDetailsSheet = false },
+                )
+            }
+        }
+
+        if (showTravelSettlementDetailsSheet && selectedTravelTrip != null) {
+            ModalBottomSheet(
+                onDismissRequest = { showTravelSettlementDetailsSheet = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                TravelSettlementDetailsSheet(
+                    trip = selectedTravelTrip,
+                    summary = buildTravelSummary(selectedTravelTrip),
+                    onDismiss = { showTravelSettlementDetailsSheet = false },
+                    onCopy = {
+                        clipboardManager.setText(AnnotatedString(buildTravelCopyText(selectedTravelTrip)))
+                        showTravelSettlementDetailsSheet = false
+                        Toast.makeText(context, "已复制简洁账单", Toast.LENGTH_SHORT).show()
+                    },
                 )
             }
         }
@@ -1254,6 +1292,8 @@ private fun TravelInsightGrid(
     trip: TravelTrip,
     summary: TravelSummary,
     onCopySettlement: () -> Unit,
+    onOpenCategoryDetails: () -> Unit,
+    onOpenSettlementDetails: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1261,12 +1301,14 @@ private fun TravelInsightGrid(
     ) {
         TravelCategoryCompactPanel(
             trip = trip,
+            onOpenDetails = onOpenCategoryDetails,
             modifier = Modifier.weight(1f),
         )
         TravelSettlementCompactPanel(
             trip = trip,
             summary = summary,
             onCopy = onCopySettlement,
+            onOpenDetails = onOpenSettlementDetails,
             modifier = Modifier.weight(1f),
         )
     }
@@ -1275,27 +1317,48 @@ private fun TravelInsightGrid(
 @Composable
 private fun TravelCategoryCompactPanel(
     trip: TravelTrip,
+    onOpenDetails: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val stats = remember(trip.expenses) { buildTravelCategoryStats(trip).take(3) }
+    val allStats = remember(trip.expenses) { buildTravelCategoryStats(trip) }
+    val stats = remember(allStats) { allStats.take(3) }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = TravelSurfaceWarm),
         shape = androidx.compose.material3.MaterialTheme.shapes.large,
         border = BorderStroke(1.dp, Color(0xFFE8DDC7)),
-        modifier = modifier,
+        modifier = modifier.clickable(
+            enabled = allStats.isNotEmpty(),
+            onClick = onOpenDetails,
+        ),
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = "支出分类",
-                style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = FontWeight.SemiBold,
-                ),
-                maxLines = 1,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "支出分类",
+                    modifier = Modifier.weight(1f),
+                    style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (allStats.size > stats.size) {
+                    Text(
+                        text = "${stats.size}/${allStats.size}",
+                        color = TravelMutedText,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                    )
+                }
+            }
             if (stats.isEmpty()) {
                 Text(
                     text = "暂无支出",
@@ -1314,6 +1377,7 @@ private fun TravelCategoryCompactPanel(
                     ) {
                         Text(
                             text = stat.category.label,
+                            modifier = Modifier.weight(0.46f),
                             color = TravelInk,
                             style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(
                                 fontWeight = FontWeight.SemiBold,
@@ -1323,10 +1387,12 @@ private fun TravelCategoryCompactPanel(
                         )
                         Text(
                             text = formatMoney(stat.amountCents),
+                            modifier = Modifier.weight(0.54f),
                             color = TravelInk,
                             style = androidx.compose.material3.MaterialTheme.typography.bodySmall.copy(
                                 fontWeight = FontWeight.SemiBold,
                             ),
+                            textAlign = TextAlign.End,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -1341,6 +1407,18 @@ private fun TravelCategoryCompactPanel(
                     )
                 }
             }
+            if (allStats.size > stats.size) {
+                Text(
+                    text = "点击查看全部分类",
+                    modifier = Modifier.fillMaxWidth(),
+                    color = TravelTeal,
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall.copy(
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }
@@ -1350,15 +1428,20 @@ private fun TravelSettlementCompactPanel(
     trip: TravelTrip,
     summary: TravelSummary,
     onCopy: () -> Unit,
+    onOpenDetails: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val lines = remember(trip) { buildTravelSettlementLines(trip).take(2) }
+    val allLines = remember(trip) { buildTravelSettlementLines(trip) }
+    val lines = remember(allLines) { allLines.take(2) }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = TravelSurfaceWarm),
         shape = androidx.compose.material3.MaterialTheme.shapes.large,
         border = BorderStroke(1.dp, Color(0xFFE8DDC7)),
-        modifier = modifier,
+        modifier = modifier.clickable(
+            enabled = allLines.isNotEmpty(),
+            onClick = onOpenDetails,
+        ),
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -1371,6 +1454,7 @@ private fun TravelSettlementCompactPanel(
             ) {
                 Text(
                     text = "AA 待结算",
+                    modifier = Modifier.weight(1f),
                     style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.SemiBold,
                     ),
@@ -1380,7 +1464,6 @@ private fun TravelSettlementCompactPanel(
                 TextButton(
                     onClick = onCopy,
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-                    modifier = Modifier.defaultMinSize(minWidth = 1.dp, minHeight = 32.dp),
                 ) {
                     Text("复制", maxLines = 1)
                 }
@@ -1410,7 +1493,7 @@ private fun TravelSettlementCompactPanel(
                 ) {
                     Text(
                         text = "${line.debtor} → ${line.creditor}",
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(0.48f),
                         color = TravelInk,
                         style = androidx.compose.material3.MaterialTheme.typography.bodySmall.copy(
                             fontWeight = FontWeight.Medium,
@@ -1420,13 +1503,208 @@ private fun TravelSettlementCompactPanel(
                     )
                     Text(
                         text = formatMoney(line.amountCents),
+                        modifier = Modifier.weight(0.52f),
                         color = TravelTerracotta,
                         style = androidx.compose.material3.MaterialTheme.typography.bodySmall.copy(
                             fontWeight = FontWeight.SemiBold,
                         ),
+                        textAlign = TextAlign.End,
                         maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
+            }
+            if (allLines.size > lines.size) {
+                Text(
+                    text = "点击查看全部 ${allLines.size} 条",
+                    modifier = Modifier.fillMaxWidth(),
+                    color = TravelTeal,
+                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall.copy(
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TravelSheetHeader(
+    title: String,
+    subtitle: String,
+    onDismiss: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(
+                text = title,
+                color = TravelInk,
+                style = androidx.compose.material3.MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = subtitle,
+                color = TravelMutedText,
+                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        IconButton(onClick = onDismiss) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "关闭",
+            )
+        }
+    }
+}
+
+@Composable
+private fun TravelCategoryDetailsSheet(
+    trip: TravelTrip,
+    onDismiss: () -> Unit,
+) {
+    val stats = remember(trip.expenses) { buildTravelCategoryStats(trip) }
+
+    Column(
+        modifier = Modifier
+            .navigationBarsPadding()
+            .padding(start = 20.dp, end = 20.dp, bottom = 24.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        TravelSheetHeader(
+            title = "支出分类详情",
+            subtitle = "${stats.size} 个分类",
+            onDismiss = onDismiss,
+        )
+        if (stats.isEmpty()) {
+            Text(
+                text = "暂无支出",
+                color = TravelMutedText,
+                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+            )
+            return@Column
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            stats.forEach { stat ->
+                val visual = travelCategoryVisual(stat.category)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(visual.background, androidx.compose.material3.MaterialTheme.shapes.medium),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    imageVector = visual.icon,
+                                    contentDescription = stat.category.label,
+                                    tint = visual.tint,
+                                    modifier = Modifier.size(19.dp),
+                                )
+                            }
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(
+                                    text = stat.category.label,
+                                    color = TravelInk,
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.SemiBold,
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "${stat.expenseCount} 笔",
+                                    color = TravelMutedText,
+                                    style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                        Text(
+                            text = formatMoney(stat.amountCents),
+                            color = TravelInk,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                            maxLines = 1,
+                        )
+                    }
+                    LinearProgressIndicator(
+                        progress = { stat.progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(7.dp),
+                        color = visual.tint,
+                        trackColor = Color(0xFFE8E0D0),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TravelSettlementDetailsSheet(
+    trip: TravelTrip,
+    summary: TravelSummary,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit,
+) {
+    val lines = remember(trip) { buildTravelSettlementLines(trip) }
+
+    Column(
+        modifier = Modifier
+            .navigationBarsPadding()
+            .padding(start = 20.dp, end = 20.dp, bottom = 24.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        TravelSheetHeader(
+            title = "AA 待结算详情",
+            subtitle = "待结算总额 ${formatMoney(summary.settlementDueCents)}",
+            onDismiss = onDismiss,
+        )
+        TextButton(
+            onClick = onCopy,
+            modifier = Modifier.align(Alignment.End),
+        ) {
+            Icon(Icons.Default.ContentCopy, contentDescription = null)
+            Spacer(modifier = Modifier.size(4.dp))
+            Text("复制")
+        }
+        if (lines.isEmpty()) {
+            Text(
+                text = "当前没有待结算项目",
+                color = TravelMutedText,
+                style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+            )
+            return@Column
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            lines.forEach { line ->
+                TravelSettlementLineRow(line = line)
             }
         }
     }
@@ -1843,7 +2121,7 @@ private fun TravelExpenseSheet(
 
         TravelSectionCard(
             title = "参与人",
-            subtitle = "只给实际参与的人均摊",
+            subtitle = "只给实际参与的人均摊，付款人必选",
         ) {
             if (trip.members.isEmpty()) {
                 Text(
@@ -1856,7 +2134,8 @@ private fun TravelExpenseSheet(
                         TravelParticipantChip(
                             text = member,
                             selected = member in draft.participantMembers,
-                            onClick = { onToggleParticipant(member) },
+                            required = member == draft.payer,
+                            onClick = { if (member != draft.payer) onToggleParticipant(member) },
                         )
                     }
                 }
@@ -2382,16 +2661,22 @@ private fun TravelPayerChip(
 private fun TravelParticipantChip(
     text: String,
     selected: Boolean,
+    required: Boolean = false,
     onClick: () -> Unit,
 ) {
     Surface(
         onClick = onClick,
+        enabled = !required,
         color = if (selected) Color(0xFFE3F7EC) else androidx.compose.material3.MaterialTheme.colorScheme.surfaceVariant,
         shape = androidx.compose.material3.MaterialTheme.shapes.extraLarge,
         border = BorderStroke(1.dp, if (selected) Color(0xFF2BA06A) else Color.Transparent),
     ) {
         Text(
-            text = if (selected) "$text ✓" else text,
+            text = when {
+                required -> "$text ✓ 必选"
+                selected -> "$text ✓"
+                else -> text
+            },
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             style = androidx.compose.material3.MaterialTheme.typography.bodyMedium.copy(
                 fontWeight = FontWeight.SemiBold,
@@ -2514,7 +2799,7 @@ private fun TravelMemberChip(
 private fun travelDestinationTheme(rawDestination: String): TravelDestinationTheme {
     val text = rawDestination.trim()
     return when {
-        text.containsAny("苏州", "杭州", "南京", "无锡", "扬州", "乌镇", "西塘", "绍兴", "周庄", "同里") -> TravelDestinationTheme(
+        text.containsAny("苏州", "杭州", "南京", "无锡", "扬州", "乌镇", "西塘", "绍兴", "周庄", "同里", "南浔", "嘉兴", "湖州") -> TravelDestinationTheme(
             title = "江南",
             imageRes = R.drawable.travel_hero_jiangnan,
             skyTop = Color(0xFFEAF7EF),
@@ -2524,7 +2809,7 @@ private fun travelDestinationTheme(rawDestination: String): TravelDestinationThe
             warm = Color(0xFFFFD98A),
         )
 
-        text.containsAny("三亚", "厦门", "青岛", "珠海", "北海", "舟山", "威海", "大连", "海口", "深圳", "香港", "澳门") -> TravelDestinationTheme(
+        text.containsAny("三亚", "厦门", "青岛", "珠海", "北海", "舟山", "威海", "大连", "海口", "深圳", "香港", "澳门", "烟台", "惠州", "汕头", "湛江", "陵水", "万宁", "日照") -> TravelDestinationTheme(
             title = "海滨",
             imageRes = R.drawable.travel_hero_coast,
             skyTop = Color(0xFFE6F7F4),
@@ -2534,7 +2819,7 @@ private fun travelDestinationTheme(rawDestination: String): TravelDestinationThe
             warm = Color(0xFFFFC16F),
         )
 
-        text.containsAny("重庆", "成都", "贵阳", "张家界", "武夷山", "黄山", "恩施") -> TravelDestinationTheme(
+        text.containsAny("重庆", "成都", "贵阳", "张家界", "武夷山", "黄山", "恩施", "峨眉山", "乐山", "都江堰", "青城山", "梵净山") -> TravelDestinationTheme(
             title = "山城",
             imageRes = R.drawable.travel_hero_mountain_city,
             skyTop = Color(0xFFFFF1DE),
@@ -2544,7 +2829,7 @@ private fun travelDestinationTheme(rawDestination: String): TravelDestinationThe
             warm = Color(0xFFFFC46F),
         )
 
-        text.containsAny("北京", "西安", "洛阳", "开封", "大同", "平遥", "敦煌", "泉州") -> TravelDestinationTheme(
+        text.containsAny("北京", "西安", "洛阳", "开封", "大同", "平遥", "敦煌", "泉州", "天水", "喀什", "吐鲁番", "银川", "承德", "曲阜") -> TravelDestinationTheme(
             title = "古都",
             imageRes = R.drawable.travel_hero_ancient_city,
             skyTop = Color(0xFFFFF0D8),
@@ -2554,7 +2839,17 @@ private fun travelDestinationTheme(rawDestination: String): TravelDestinationThe
             warm = Color(0xFFFFD27A),
         )
 
-        text.containsAny("拉萨", "西宁", "香格里拉", "稻城", "九寨沟", "大理", "丽江", "昆明", "桂林", "阳朔") -> TravelDestinationTheme(
+        text.containsAny("川西", "甘南", "阿坝", "甘孜", "理塘", "色达", "稻城", "亚丁", "四姑娘山", "毕棚沟", "九寨沟", "黄龙", "若尔盖", "红原", "玛曲", "郎木寺", "扎尕那", "夏河", "拉卜楞寺", "塔公", "新都桥", "康定", "丹巴", "松潘") -> TravelDestinationTheme(
+            title = "高原",
+            imageRes = R.drawable.travel_hero_west_sichuan,
+            skyTop = Color(0xFFEAF6FF),
+            skyBottom = Color(0xFFC8D9B8),
+            accent = Color(0xFFB88732),
+            deep = Color(0xFF2F5A4C),
+            warm = Color(0xFFFFD58E),
+        )
+
+        text.containsAny("拉萨", "西宁", "香格里拉", "大理", "丽江", "昆明", "桂林", "阳朔", "泸沽湖", "洱海", "玉龙雪山", "西双版纳", "腾冲", "普洱", "林芝", "纳木错") -> TravelDestinationTheme(
             title = "山湖",
             imageRes = R.drawable.travel_hero_highland,
             skyTop = Color(0xFFEAF6FF),
@@ -2564,7 +2859,7 @@ private fun travelDestinationTheme(rawDestination: String): TravelDestinationThe
             warm = Color(0xFFFFD58E),
         )
 
-        text.containsAny("哈尔滨", "长春", "沈阳", "雪乡", "漠河", "阿勒泰", "长白山") -> TravelDestinationTheme(
+        text.containsAny("哈尔滨", "长春", "沈阳", "雪乡", "漠河", "阿勒泰", "长白山", "延吉", "吉林", "伊春", "牡丹江", "呼伦贝尔", "满洲里") -> TravelDestinationTheme(
             title = "雪境",
             imageRes = R.drawable.travel_hero_snow,
             skyTop = Color(0xFFE8F4FF),
@@ -2574,7 +2869,7 @@ private fun travelDestinationTheme(rawDestination: String): TravelDestinationThe
             warm = Color(0xFFFFD28D),
         )
 
-        text.containsAny("上海", "广州", "武汉", "长沙", "天津", "宁波", "郑州", "合肥", "福州", "南昌") -> TravelDestinationTheme(
+        text.containsAny("上海", "广州", "武汉", "长沙", "天津", "宁波", "郑州", "合肥", "福州", "南昌", "沈阳", "石家庄", "济南", "太原", "兰州", "南宁", "佛山", "东莞") -> TravelDestinationTheme(
             title = "城市",
             imageRes = R.drawable.travel_hero_metropolis,
             skyTop = Color(0xFFEAF4F1),

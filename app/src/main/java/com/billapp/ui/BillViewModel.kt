@@ -391,7 +391,7 @@ class BillViewModel(
                 category = expense.category,
                 amountText = formatCentsForInput(expense.amountCents),
                 payer = expense.payer,
-                participantMembers = (expense.members.takeIf { it.isNotEmpty() } ?: trip.members).distinct(),
+                participantMembers = ((expense.members.takeIf { it.isNotEmpty() } ?: trip.members) + expense.payer).distinct(),
                 note = expense.note,
             ),
             editingExpenseId = expense.id,
@@ -523,6 +523,9 @@ class BillViewModel(
             if (trip == null || candidate !in trip.members) {
                 current
             } else {
+                if (candidate == current.draft.payer) {
+                    return@update current
+                }
                 val nextMembers = if (candidate in current.draft.participantMembers) {
                     current.draft.participantMembers.filterNot { it == candidate }
                 } else {
@@ -931,16 +934,12 @@ class BillViewModel(
         val participants = currentDraft.participantMembers
             .map { it.trim() }
             .filter { it in trip.members }
+            .plus(payer)
             .distinct()
         if (participants.isEmpty()) {
             _travelUiState.update { it.copy(error = "请至少选择 1 位参与人") }
             return
         }
-        if (payer !in participants) {
-            _travelUiState.update { it.copy(error = "付款人也需要在参与人中") }
-            return
-        }
-
         val previousExpense = editingExpenseId?.let { id ->
             trip.expenses.firstOrNull { it.id == id }
         }
