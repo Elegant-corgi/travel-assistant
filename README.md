@@ -105,15 +105,6 @@ app/build/outputs/apk/debug/
 
 <img src="docs/images/travel-expense-editor.jpg" alt="旅行支出编辑页面，展示类别、金额、付款人和参与人选择" width="300">
 
-### 其他页面
-
-- 账单首页
-![账单首页](docs/images/image.png)
-- AA 分账页面
-![AA 分账页面](docs/images/image-1.png)
-- 记账详情
-![记账详情](docs/images/image-3.png)
-
 截图统一存放于 `docs/images/` 目录。
 
 ## License
