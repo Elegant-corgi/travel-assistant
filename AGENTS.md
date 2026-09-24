@@ -1,4 +1,4 @@
-# AGENTS.md - PocketLedger 项目工作规则
+# AGENTS.md - 旅行助手项目工作规则
 
 ## 基本原则
 

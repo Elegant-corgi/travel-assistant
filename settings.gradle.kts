@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PocketLedger"
+rootProject.name = "TravelAssistant"
 include(":app")
